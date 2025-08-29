@@ -72,7 +72,7 @@ sif_url="https://github.com/concept-lab/NextGenPB/releases/download/NextGenPB_v1
 
 if [ ! -f "$sif_file" ];
 then
-  echo "Downloading NGPB image from $sif_url..."
+  echo "Downloading NGPB generic image from $sif_url..."
   if [ "$DOWNLOAD_CMD" == "curl" ];
   then
       curl -L -o "$sif_file" "$sif_url" || { echo "Failed to download NGPB image with curl"; exit 1; }
