@@ -22,14 +22,10 @@ RUN cd /tmp && \
 # Install Node via Conda
 RUN conda install -c conda-forge nodejs
 
-# Create user 'builder', add to sudo group, and enable passwordless sudo
-RUN useradd -ms /bin/bash builder && \
-    usermod -aG sudo builder && \
-    echo '%sudo ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
-
-# Switch to the new user
-USER builder
-WORKDIR /home/builder
+# Create user 'mc4', switch to the new user
+RUN useradd -ms /bin/bash mc4
+USER mc4
+WORKDIR /home/mc4
 
 # Optional: Ensure bash is used for RUN commands later (if you add any)
 SHELL ["/bin/bash", "-l", "-c"]
