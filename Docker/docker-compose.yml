@@ -11,3 +11,5 @@ services:
       com.mcce4.description: "Main build server for Alpha project"
       com.mcce4.maintainer: "GunnerLab"
     tty: true
+    volumes:
+      - ../:/home/mc4/MCCE4-Alpha
