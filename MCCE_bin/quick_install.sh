@@ -158,6 +158,15 @@ else
   fi
 fi
 
+# Check if user namespaces are enabled (required for unprivileged Apptainer)
+if command -v unshare >/dev/null 2>&1 && ! unshare -U true >/dev/null 2>&1; then
+  echo ""
+  echo "WARNING: User namespaces are not enabled! Apptainer will likely fail."
+  echo "       If running inside Docker, ensure you use '--security-opt seccomp=unconfined'."
+  echo "       Otherwise, contact your system administrator to enable user namespaces."
+  echo ""
+fi
+
 if [[ "$DO_CONDA" -eq 1 ]]; then
   echo ""
   echo "Conda environment creation..."

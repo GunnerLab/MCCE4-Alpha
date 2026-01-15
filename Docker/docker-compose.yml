@@ -6,6 +6,12 @@ services:
       dockerfile: Dockerfile
     image: mcce4-alpha
     container_name: MCCE4-Alpha
+    security_opt:
+      # Required for Apptainer to create user namespaces (run without root)
+      - seccomp:unconfined
+    devices:
+      # Required for Apptainer to mount .sif images via FUSE
+      - /dev/fuse
     labels:
       com.mcce4.authors: "Julian A. Rendon"
       com.mcce4.description: "Main build server for Alpha project"
