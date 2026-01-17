@@ -45,6 +45,21 @@ This environment is configured to support **Apptainer-in-Docker**. Standard Dock
 
 The project root (`../`) is mounted to `/home/mc4/MCCE4-Alpha` inside the container. Any changes made to the source code on your host machine will be immediately visible inside the container.
 
+## Creating an Apptainer Image (.sif)
+
+If you prefer to run MCCE4 using Apptainer (Singularity) directly on your host machine, you can convert the built Docker image into a `.sif` file.
+
+1.  **Build the Docker image** (if not already done):
+    ```bash
+    cd Docker
+    docker compose build
+    ```
+
+2.  **Build the SIF file** using Apptainer:
+    ```bash
+    apptainer build mcce4-alpha.sif docker-daemon://mcce4-alpha:latest
+    ```
+
 ## Troubleshooting
 
 If you encounter errors like `Failed to create user namespace` when running Apptainer:
