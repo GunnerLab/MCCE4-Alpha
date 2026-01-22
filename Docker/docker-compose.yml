@@ -1,9 +1,9 @@
 name: mcce4-alpha
 services:
-  build-server:
+  mcce4-alpha:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: Docker/Dockerfile
     image: mcce4-alpha
     container_name: MCCE4-Alpha
     security_opt:
@@ -14,8 +14,8 @@ services:
       - /dev/fuse
     labels:
       com.mcce4.authors: "Julian A. Rendon"
-      com.mcce4.description: "Main build server for Alpha project"
+      com.mcce4.description: "Container for MCCE4-Alpha project"
       com.mcce4.maintainer: "GunnerLab"
     tty: true
-    volumes:
-      - ../:/home/mc4/MCCE4-Alpha
+    # volumes:
+    #   - ../:/home/mc4/MCCE4-Alpha

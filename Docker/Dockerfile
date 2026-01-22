@@ -27,5 +27,17 @@ RUN useradd -ms /bin/bash mc4
 USER mc4
 WORKDIR /home/mc4
 
+COPY --chown=mc4:mc4 ./MCCE_bin/ /home/mc4/MCCE4-Alpha/MCCE_bin/
+COPY --chown=mc4:mc4 ./bin/ /home/mc4/MCCE4-Alpha/bin/
+COPY --chown=mc4:mc4 ./mc4.yml /home/mc4/MCCE4-Alpha
+
+RUN bash ./MCCE4-Alpha/MCCE_bin/quick_install.sh
+
+ENV PATH="/home/mc4/.conda/envs/mc4/bin:/home/mc4/MCCE4-Alpha/bin:/home/mc4/MCCE4-Alpha/MCCE_bin:${PATH}"
+ENV CONDA_DEFAULT_ENV="mc4"
+
 # Optional: Ensure bash is used for RUN commands later (if you add any)
 SHELL ["/bin/bash", "-l", "-c"]
+
+# Keep the container running indefinitely so we can access it via exec
+CMD ["tail", "-f", "/dev/null"]
