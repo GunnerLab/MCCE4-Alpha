@@ -1,0 +1,31 @@
+# Version Control
+.git
+.gitignore
+
+# Docker
+.dockerignore
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+venv/
+env/
+
+# IDEs and System
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# MCCE4 Large Artifacts and Run Outputs
+*.sif
+*.log
+fort.*
+*.out
+step*_out.pdb
+head*.lst
+energies.opp
+vdw.ene
+mc_out
