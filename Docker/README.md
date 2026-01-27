@@ -19,7 +19,7 @@ docker build -t mcce4-alpha -f Docker/Dockerfile .
 ### 2. Convert to Apptainer (.sif)
 Flatten the Docker layers into a portable, read-only Apptainer image:
 ```bash
-apptainer build mcce4-alpha.sif docker-daemon://mcce4-alpha:latest
+apptainer -v build mcce4-alpha.sif docker-daemon://mcce4-alpha:latest
 ```
 
 ### 3. Verification

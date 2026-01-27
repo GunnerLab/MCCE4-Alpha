@@ -1,4 +1,4 @@
-FROM continuumio/miniconda3
+FROM condaforge/miniforge3
 
 # Install system tools
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -16,11 +16,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN cd /tmp && \
     wget https://github.com/apptainer/apptainer/releases/download/v1.4.5/apptainer_1.4.5_amd64.deb && \
     apt-get update && apt-get install -y \
-    ./apptainer_1.4.5_amd64.deb  && \
+    ./apptainer_1.4.5_amd64.deb && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Install Node via Conda
-RUN conda install -c conda-forge nodejs
+# RUN conda install -c conda-forge nodejs
 
 # Create user 'mc4', switch to the new user
 RUN useradd -ms /bin/bash mc4
