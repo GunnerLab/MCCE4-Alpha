@@ -9,6 +9,7 @@ benchmark.info
 benchmark.log
 
 # Executables
+*.sif
 bin/NextGenPB*.sif
 bin/delphi
 bin/mcce
