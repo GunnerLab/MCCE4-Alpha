@@ -2,9 +2,12 @@ name: mcce4-alpha
 services:
   mcce4-alpha:
     build:
-      context: ..
-      dockerfile: Docker/Dockerfile
-    image: mcce4-alpha
+      context: .
+      dockerfile: Dockerfile.dev
+      args:
+      - USER_UID=${USER_UID}
+      - USER_GID=${USER_GID}
+    image: mcce4-alpha:dev
     container_name: MCCE4-Alpha
     security_opt:
       # Required for Apptainer to create user namespaces (run without root)
@@ -12,10 +15,6 @@ services:
     devices:
       # Required for Apptainer to mount .sif images via FUSE
       - /dev/fuse
-    labels:
-      com.mcce4.authors: "Julian A. Rendon"
-      com.mcce4.description: "Container for MCCE4-Alpha project"
-      com.mcce4.maintainer: "GunnerLab"
     tty: true
-    # volumes:
-    #   - ../:/home/mc4/MCCE4-Alpha
+    volumes:
+      - ../:/home/mc4/MCCE4-Alpha/
