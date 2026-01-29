@@ -6,7 +6,7 @@ This directory contains the Docker configuration for the MCCE4-Alpha project. It
 
 - [Docker Engine](https://docs.docker.com/engine/install/)
 - [Docker Compose](https://docs.docker.com/compose/install/)
-- Apptainer (optional: only if converting to .sif locally)
+- [Apptainer](https://apptainer.org/docs/admin/main/installation.html#install-unprivileged-from-pre-built-binaries) *(optional: only if converting to .sif locally)*
 
 ## Getting Started
 
@@ -46,11 +46,31 @@ This environment is configured to support **Apptainer-in-Docker**. Standard Dock
 **[!IMPORTANT]** If running manually via docker run, you must include these flags: `--security-opt seccomp=unconfined --device /dev/fuse`
 
 ## Development Workflow
+This workflow is ***specifically*** for developers who want to test changes within an isolated container environment. It allows you to experiment with new scripts, tools, or configurations without cluttering your local machine or risking dependency conflicts.
+
+### 1. Initialize Environment
+First, generate a `.env` file tailored to yoru specific User and Group IDs.
+```bash
+cd MCCE4-Alpha/Docker/scripts
+./setup_env.sh
+```
+**Why we do this**: Linux identifies file owners by numeric IDs (UID/GID), not names. Your laptop user is likely `1000`. This script detects your specific IDs and saves them to `Docker/.env`. When Docker builds the image, it uses these numbers to "morph" the internal `mc4` user to match your identity exactly.
+
+### 2. Build and Start the Container
+Navigate back to the `Docker` directory and launch the environment.
+```bash
+cd ../
+docker compose up --build -d
+```
+**What this does**:
+- `--build`: Rebuilds the image to ensure your detached UID/GID and any Dockerfile chages are applied
+- `d`: Runs the container in the background so you can continue using your terminal
+
+### 3. Enter the Development Environment
+Open an interactive bash session inside the isolated container to start testing.
+```bash
+docker exec -it MCCE4-Alpha /bin/bash
+```
 
 ### Volume Mounts
-The project root (`../`) can be mounted to `/home/mc4/MCCE4-Alpha` inside the container. Any changes made to the source code on your host machine will be immediately visible inside the container.
-
-### Troubleshooting
-If you encounter errors like `Failed to create user namespace` when running Apptainer:
-1. Ensure you are starting the container with `docker compose up` (which applies the security config).
-2. If running manually via `docker run`, you must include `--security-opt seccomp=unconfined --device /dev/fuse`.
+The project root is mounted to `/home/mc4/MCCE4-Alpha`. Because of the `setup_env.sh` step, any file you create or edit inside the container will be owned by you on your host machine, and vice-versa. You can write code in your favorite IDE (VS Code, etc.) on your laptop, and immediately run it inside the container.
