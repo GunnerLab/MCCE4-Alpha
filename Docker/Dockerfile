@@ -1,5 +1,10 @@
 FROM condaforge/miniforge3
 
+LABEL com.mcce4.image.authors="Julian A. Rendon" \
+    com.mcce4.image.description="MCCE4-Alpha Docker Environment" \
+    com.mcce4.image.source="https://github.com/GunnerLab/MCCE4-Alpha" \
+    com.mcce4.image.maintainer="Gunner Lab"
+
 # Install system tools
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
@@ -22,7 +27,7 @@ RUN cd /tmp && \
 # Install Node via Conda
 # RUN conda install -c conda-forge nodejs
 
-# Create user 'mc4', switch to the new user
+# Create a Linux user and switch to the new user
 RUN useradd -ms /bin/bash mc4
 USER mc4
 WORKDIR /home/mc4
