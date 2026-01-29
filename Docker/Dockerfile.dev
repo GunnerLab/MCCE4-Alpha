@@ -5,28 +5,6 @@ LABEL com.mcce4.image.authors="Julian A. Rendon" \
     com.mcce4.image.source="https://github.com/GunnerLab/MCCE4-Alpha" \
     com.mcce4.image.maintainer="Gunner Lab"
 
-# Install system tools
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    wget \
-    build-essential \
-    curl \
-    git \
-    iproute2 \
-    net-tools \
-    openssh-client \
-    sudo \
-    tree && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
-
-RUN cd /tmp && \
-    wget https://github.com/apptainer/apptainer/releases/download/v1.4.5/apptainer_1.4.5_amd64.deb && \
-    apt-get update && apt-get install -y \
-    ./apptainer_1.4.5_amd64.deb && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
-
-# Install Node via Conda
-# RUN conda install -c conda-forge nodejs
-
 # These are fallbacks. They will be OVERWRITTEN by your Docker Compose args.
 ARG USERNAME=mc4
 ARG USER_UID=1000
@@ -37,6 +15,26 @@ ARG USER_GID=1000
 RUN groupmod -n $USERNAME ubuntu && \
     groupmod -g $USER_GID $USERNAME && \
     usermod -l $USERNAME -u $USER_UID -g $USER_GID -m -d /home/$USERNAME ubuntu
+
+RUN cd /tmp && \
+    wget https://github.com/apptainer/apptainer/releases/download/v1.4.5/apptainer_1.4.5_amd64.deb && \
+    apt-get update && apt-get install -y \
+    ./apptainer_1.4.5_amd64.deb && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Install system tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    git \
+    iproute2 \
+    net-tools \
+    openssh-client \
+    sudo \
+    tree \
+    vim \
+    wget && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Switch from root to the new user for security and file ownership parity.
 USER $USERNAME
