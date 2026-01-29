@@ -11,10 +11,12 @@ This directory contains the Docker configuration for the MCCE4-Alpha project. It
 ## Getting Started
 
 ### 1. Build the Docker Image
-Initialize the base environment from the project root:
+From the root directory of the project initialize the base environment:
 ```bash
 docker build -t mcce4-alpha -f Docker/Dockerfile .
 ```
+>[!IMPORTANT]
+There are two dockerfiles. One is for production ready code, `Dockerfile`, while the other is for development purposes, `Dockerfile.dev`. <br> We need to run this command from the root directory so that the build context can locate the necessary files to copy into the conatiner.
 
 ### 2. Convert to Apptainer (.sif)
 Flatten the Docker layers into a portable, read-only Apptainer image:
@@ -42,8 +44,8 @@ This environment is configured to support **Apptainer-in-Docker**. Standard Dock
 
 *   **`security_opt: - seccomp:unconfined`**: Allows the `unshare` system call, which Apptainer uses to create User Namespaces (required for unprivileged execution).
 *   **`devices: - /dev/fuse`**: Exposes the FUSE device, allowing Apptainer to mount `.sif` images without root privileges.
-
-**[!IMPORTANT]** If running manually via docker run, you must include these flags: `--security-opt seccomp=unconfined --device /dev/fuse`
+>[!IMPORTANT]
+If running manually via docker run, you must include these flags: `--security-opt seccomp=unconfined --device /dev/fuse`
 
 ## Development Workflow
 This workflow is ***specifically*** for developers who want to test changes within an isolated container environment. It allows you to experiment with new scripts, tools, or configurations without cluttering your local machine or risking dependency conflicts.
@@ -71,6 +73,6 @@ Open an interactive bash session inside the isolated container to start testing.
 ```bash
 docker exec -it MCCE4-Alpha /bin/bash
 ```
-
 ### Volume Mounts
+>[!NOTE]
 The project root is mounted to `/home/mc4/MCCE4-Alpha`. Because of the `setup_env.sh` step, any file you create or edit inside the container will be owned by you on your host machine, and vice-versa. You can write code in your favorite IDE (VS Code, etc.) on your laptop, and immediately run it inside the container.
