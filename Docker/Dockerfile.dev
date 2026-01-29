@@ -16,6 +16,7 @@ RUN groupmod -n $USERNAME ubuntu && \
     groupmod -g $USER_GID $USERNAME && \
     usermod -l $USERNAME -u $USER_UID -g $USER_GID -m -d /home/$USERNAME ubuntu
 
+# Install Apptainer
 RUN cd /tmp && \
     wget https://github.com/apptainer/apptainer/releases/download/v1.4.5/apptainer_1.4.5_amd64.deb && \
     apt-get update && apt-get install -y \

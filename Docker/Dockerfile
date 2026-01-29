@@ -5,9 +5,19 @@ LABEL com.mcce4.image.authors="Julian A. Rendon" \
     com.mcce4.image.source="https://github.com/GunnerLab/MCCE4-Alpha" \
     com.mcce4.image.maintainer="Gunner Lab"
 
+# Create a Linux user
+ARG USERNAME=mc4
+RUN useradd -ms /bin/bash $USERNAME
+
+# Install Apptainer
+RUN cd /tmp && \
+    wget https://github.com/apptainer/apptainer/releases/download/v1.4.5/apptainer_1.4.5_amd64.deb && \
+    apt-get update && apt-get install -y \
+    ./apptainer_1.4.5_amd64.deb && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
 # Install system tools
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    wget \
     build-essential \
     curl \
     git \
@@ -15,23 +25,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     net-tools \
     openssh-client \
     sudo \
-    tree && \
+    tree \
+    vim \
+    wget && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-RUN cd /tmp && \
-    wget https://github.com/apptainer/apptainer/releases/download/v1.4.5/apptainer_1.4.5_amd64.deb && \
-    apt-get update && apt-get install -y \
-    ./apptainer_1.4.5_amd64.deb && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
-
-# Install Node via Conda
-# RUN conda install -c conda-forge nodejs
-
-# Create a Linux user and switch to the new user
-RUN useradd -ms /bin/bash mc4
+# Switch from root to the new user.
 USER mc4
 WORKDIR /home/mc4
 
+# Necessary to run quick_install.sh during build time.
 COPY --chown=mc4:mc4 ./MCCE_bin/ /home/mc4/MCCE4-Alpha/MCCE_bin/
 COPY --chown=mc4:mc4 ./bin/ /home/mc4/MCCE4-Alpha/bin/
 COPY --chown=mc4:mc4 ./mc4.yml /home/mc4/MCCE4-Alpha
