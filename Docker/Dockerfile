@@ -41,6 +41,8 @@ COPY --chown=mc4:mc4 ./mc4.yml /home/mc4/MCCE4-Alpha
 
 RUN bash ./MCCE4-Alpha/MCCE_bin/quick_install.sh
 
+# Pre-configure PATH and Conda env to enable the container to function as a 
+# CLI tool, allowing scripts to run globally without manual activation.
 ENV PATH="/home/mc4/.conda/envs/mc4/bin:/home/mc4/MCCE4-Alpha/bin:/home/mc4/MCCE4-Alpha/MCCE_bin:${PATH}"
 ENV CONDA_DEFAULT_ENV="mc4"
 
