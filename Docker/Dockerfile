@@ -35,9 +35,14 @@ USER mc4
 WORKDIR /home/mc4
 
 # Necessary to run quick_install.sh during build time.
-COPY --chown=mc4:mc4 ./MCCE_bin/ /home/mc4/MCCE4-Alpha/MCCE_bin/
-COPY --chown=mc4:mc4 ./bin/ /home/mc4/MCCE4-Alpha/bin/
-COPY --chown=mc4:mc4 ./mc4.yml /home/mc4/MCCE4-Alpha
+# COPY --chown=mc4:mc4 ./MCCE_bin/ /home/mc4/MCCE4-Alpha/MCCE_bin/
+# COPY --chown=mc4:mc4 ./bin/ /home/mc4/MCCE4-Alpha/bin/
+# COPY --chown=mc4:mc4 ./param /home/mc4/MCCE4-Alpha
+# COPY --chown=mc4:mc4 ./mc4.yml /home/mc4/MCCE4-Alpha
+# COPY --chown=mc4:mc4 ./mc4.yml /home/mc4/MCCE4-Alpha
+
+# NOTE: Bake enitre codebase into image. Makes it easier until repo structure is cleaned up.
+COPY --chown=mc4:mc4 ./ /home/mc4/MCCE4-Alpha
 
 RUN bash ./MCCE4-Alpha/MCCE_bin/quick_install.sh
 
