@@ -2,8 +2,9 @@
 
 # Get current working directory and define paths
 CWD=$(dirname "$(readlink -f "$0")")
-SIF_PATH="$CWD/../mcce4-alpha.sif"
+SIF_PATH=$(readlink -f "$CWD/../mcce4-alpha.sif")
 CONTAINER_NAME="MCCE4-Alpha"
+DOCKER_DIR=$(readlink -f "$CWD/../Docker")
 
 # --- Function to display help ---
 show_help() {
@@ -15,8 +16,8 @@ show_help() {
     echo "  -h, --help  Show this help message"
     echo ""
     echo "Examples:"
-    echo "  mc4 step1.py -v         # Run via Apptainer (Production)"
-    echo "  mc4 -d step1.py -v      # Run via Docker (Development)"
+    echo "  mc4 step1.py -h         # Run via Apptainer (Production)"
+    echo "  mc4 -d step2.py -h      # Run via Docker (Development)"
     echo "  mc4 -h                  # Show this help"
 }
 
@@ -29,7 +30,21 @@ fi
 if [ "$1" == "-d" ]; then
     shift # Remove '-d' from the argument list
     
-    # Check if arguments remain after removing -d
+    # 1. Check if the container is running
+    if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+        echo "❌ Error: Docker container '$CONTAINER_NAME' is not running."
+        echo ""
+        echo "Current status of all containers:"
+        docker container ls -a
+        echo ""
+        echo "💡 Tip: To fix this, try one of the following:"
+        echo "   1. If the container is NOT listed: Run 'docker-compose up -d' in $DOCKER_DIR."
+        echo "   2. If it IS listed but Exited:     Run 'docker start $CONTAINER_NAME' and then rerun this command."
+        echo ""
+        exit 1
+    fi
+
+    # 2. Check if arguments remain after removing -d
     if [ $# -eq 0 ]; then
         echo "❌ Error: No command provided for Docker mode."
         show_help
@@ -39,7 +54,7 @@ if [ "$1" == "-d" ]; then
     echo "🛠️  Running in Docker Development Mode..."
     docker exec -it "$CONTAINER_NAME" "$@"
 
-#Apptainer Mode (Default)
+# Apptainer Mode (Default)
 else
     # Verify the .sif file exists
     if [ ! -f "$SIF_PATH" ]; then
