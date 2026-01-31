@@ -1,0 +1,58 @@
+#!/bin/bash
+
+# Get current working directory and define paths
+CWD=$(dirname "$(readlink -f "$0")")
+SIF_PATH="$CWD/../mcce4-alpha.sif"
+CONTAINER_NAME="MCCE4-Alpha"
+
+# --- Function to display help ---
+show_help() {
+    echo "MCCE4-Alpha Execution Wrapper"
+    echo "Usage: mc4 [OPTIONS] <COMMAND>"
+    echo ""
+    echo "Options:"
+    echo "  -d          Enable Development Mode (runs via Docker)"
+    echo "  -h, --help  Show this help message"
+    echo ""
+    echo "Examples:"
+    echo "  mc4 step1.py -v         # Run via Apptainer (Production)"
+    echo "  mc4 -d step1.py -v      # Run via Docker (Development)"
+    echo "  mc4 -h                  # Show this help"
+}
+
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+    show_help
+    exit 0
+fi
+
+# DOCKER Mode
+if [ "$1" == "-d" ]; then
+    shift # Remove '-d' from the argument list
+    
+    # Check if arguments remain after removing -d
+    if [ $# -eq 0 ]; then
+        echo "❌ Error: No command provided for Docker mode."
+        show_help
+        exit 1
+    fi
+    
+    echo "🛠️  Running in Docker Development Mode..."
+    docker exec -it "$CONTAINER_NAME" "$@"
+
+#Apptainer Mode (Default)
+else
+    # Verify the .sif file exists
+    if [ ! -f "$SIF_PATH" ]; then
+        echo "❌ Error: Apptainer image not found at $SIF_PATH"
+        exit 1
+    fi
+
+    # Check for empty arguments
+    if [ $# -eq 0 ]; then
+        show_help
+        exit 1
+    fi
+
+    echo "🚀 Running in Apptainer Production Mode..."
+    apptainer exec "$SIF_PATH" "$@"
+fi
