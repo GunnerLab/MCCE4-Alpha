@@ -59,19 +59,24 @@ To build and configure the `mc4` CLI tool, follow these steps:
 ```bash
 cd ~/ ; wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh && bash ~/Miniconda3-latest-Linux-x86_64.sh -b
 ```
-2. Run the `setup.sh` script form the root directroy of `MCCE4-Alpha`. This will install unprivileged Apptainer and build the `mcce4-alpha.sif` file located in `bin/`.
+2. Source path to Miniconda:
+```bash
+ source ~/miniconda3/bin/activate
+ ```
+3. Navigate to the root directroy of `MCCE4-Alpha` and run the `setup.sh` script. This will install unprivileged Apptainer and build the `mcce4-alpha.sif` file located in `bin/`.
 ```bash
 ./setup.sh
 ```
-3.  Source the `.bashrc` file.
+>[!Important] You will be prompted to update your .bashrc file. Accept so the mc4 executable can be availble to use for new terminal session.
+
+1.  Source the `.bashrc` file.
 ```bash
-sourc ~/.bashrc
+source ~/.bashrc
 ```
-4.  Activate the `mc4` environment that the setup script created.
+1.  Activate the `mc4` environment that the setup script created.
 ```bash
 conda activate mc4
 ```
-
 Once that is done, you can test it out using:
 ```bash
 mc4 which python
