@@ -69,11 +69,11 @@ cd ~/ ; wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.
 ```
 >[!Important] You will be prompted to update your .bashrc file. Accept so the mc4 executable can be availble to use for new terminal session.
 
-1.  Source the `.bashrc` file.
+4.  Source the `.bashrc` file.
 ```bash
 source ~/.bashrc
 ```
-1.  Activate the `mc4` environment that the setup script created.
+5.  Activate the `mc4` environment that the setup script created.
 ```bash
 conda activate mc4
 ```
