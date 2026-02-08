@@ -51,6 +51,39 @@ If you want to re-create it, run this command before running the script:
     * 'MCCE4-Alpha/bin' and 'MCCE4-Alpha/MCCE_bin'
     * the unprivilege version of Apptainer if installed by the script
 
+## __MCCE4-Alpha CLI__ (Optional)
+To build and configure the `mc4` CLI tool, follow these steps:
+
+1.  **Install Miniconda** (Skip if Conda is already installed):
+    Navigate to your home directory and install Miniconda.
+```bash
+cd ~/ ; wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh && bash ~/Miniconda3-latest-Linux-x86_64.sh -b
+```
+2. Run the `setup.sh` script form the root directroy of `MCCE4-Alpha`. This will install unprivileged Apptainer and build the `mcce4-alpha.sif` file located in `bin/`.
+```bash
+./setup.sh
+```
+3.  Source the `.bashrc` file.
+```bash
+sourc ~/.bashrc
+```
+4.  Activate the `mc4` environment that the setup script created.
+```bash
+conda activate mc4
+```
+
+Once that is done, you can test it out using:
+```bash
+mc4 which python
+```
+
+Expected Output
+```bash
+🚀 Running in Apptainer Production Mode...
+INFO:    fuse2fs not found, will not be able to mount EXT3 filesystems
+/opt/conda/envs/mc4/bin/python
+```
+
 ## Environment update (01-08-2026):
 If your 'mc4' environment predates 01-08-2026, run these commands to update it:
   ```bash
