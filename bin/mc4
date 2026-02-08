@@ -2,72 +2,54 @@
 
 # Get current working directory bin/ and define paths.
 BIN_DIR=$(dirname "$(readlink -f "$0")")
+PROJECT_ROOT_DIR=$(dirname "$BIN_DIR")
 SIF_PATH=$(readlink -f "$BIN_DIR/mcce4-alpha.sif")
-CONTAINER_NAME="MCCE4-Alpha"
-DOCKER_DIR=$(readlink -f "$BIN_DIR/../Docker")
 
-# --- Function to display help ---
+CONTAINER_PATH="/opt/MCCE4-Alpha" # Internal path where code lives inside the image
+BIND_ARGS=""
+
 show_help() {
-    echo "MCCE4-Alpha Execution Wrapper"
+    echo "MCCE4-Alpha CLI Tool"
     echo "Usage: mc4 [OPTIONS] <COMMAND>"
     echo ""
     echo "Options:"
-    echo "  -d          Enable Development Mode (runs via Docker)"
+    echo "  -d          Development Mode (Binds local code to container)"
     echo "  -h, --help  Show this help message"
     echo ""
     echo "Examples:"
-    echo "  mc4 step1.py -h         # Run via Apptainer (Production)"
-    echo "  mc4 -d step2.py -h      # Run via Docker (Development)"
+    echo "  mc4 step1.py prot.pdb   # Production (Uses baked-in code)"
+    echo "  mc4 -d step1.py         # Development (Uses local code)"
     echo "  mc4 -h                  # Show this help"
 }
+
+if [ ! -f "$SIF_PATH" ]; then
+    echo "❌ Error: Apptainer image not found at $SIF_PATH"
+    exit 1
+fi
 
 if [[ "$1" == "-h" || "$1" == "--help" ]]; then
     show_help
     exit 0
 fi
 
-# DOCKER Mode
+if [ $# -eq 0 ]; then
+    echo "❌ Error: No command provided."
+    show_help
+    exit 1
+fi
+
 if [ "$1" == "-d" ]; then
     shift # Remove '-d' from the argument list
     
-    # 1. Check if the container is running
-    if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-        echo "❌ Error: Docker container '$CONTAINER_NAME' is not running."
-        echo ""
-        echo "Current status of all containers:"
-        docker container ls -a
-        echo ""
-        echo "💡 Tip: To fix this, try one of the following:"
-        echo "   1. If the container is NOT listed: Run 'docker-compose up -d' in $DOCKER_DIR."
-        echo "   2. If it IS listed but Exited:     Run 'docker start $CONTAINER_NAME' and then rerun this command."
-        echo ""
-        exit 1
-    fi
-
     # 2. Check if arguments remain after removing -d
     if [ $# -eq 0 ]; then
-        echo "❌ Error: No command provided for Docker mode."
-        show_help
-        exit 1
-    fi
-    
-    echo "🛠️  Running in Docker Development Mode..."
-    docker exec -it "$CONTAINER_NAME" "$@"
-
-# Apptainer Mode (Default)
-else
-    # Verify the .sif file exists
-    if [ ! -f "$SIF_PATH" ]; then
-        echo "❌ Error: Apptainer image not found at $SIF_PATH"
-        exit 1
-    fi
-
-    # Check for empty arguments
-    if [ $# -eq 0 ]; then
+        echo "❌ Error: No command provided after -d."
         show_help
         exit 1
     fi
 
-    echo "🚀 Running in Apptainer Production Mode..."
-    apptainer exec "$SIF_PATH" "$@"
+    echo "🔧 Running in Apptainer Development Mode..."
+    BIND_ARGS="--bind $PROJECT_ROOT_DIR:$CONTAINER_PATH"
 fi
+
+apptainer exec $BIND_ARGS "$SIF_PATH" "$@"
