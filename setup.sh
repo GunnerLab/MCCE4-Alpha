@@ -23,24 +23,27 @@ update_shell_config() {
     local dir_path="$1"
     local tool_name="$2"
     local export_line="export PATH=\"$dir_path:\$PATH\""
+    local marker="# $tool_name"
 
+    # Cleans up OLD configurations
+    #    If we find the marker, we delete it AND the line immediately following it
+    if grep -qF "$marker" "$SHELL_CONFIG"; then
+        echo "🔄 Detected previous configuration. updating..."
+        sed -i "/$marker/,+1d" "$SHELL_CONFIG"
+    fi
+
+    # Check if the exact path is already there
     if grep -qF "$dir_path" "$SHELL_CONFIG"; then
-        echo "✅ The path $dir_path is already configured in $SHELL_CONFIG."
+        echo "✅ The path is already correct in $SHELL_CONFIG."
     else
-        echo "⚠️  The path $dir_path is not in your PATH."
-        echo "   Would you like to append it to $SHELL_CONFIG now? (y/n)"
-        read -r -p "   > " response
+        echo "⚠️  Adding $dir_path to your PATH..."
+        echo "" >> "$SHELL_CONFIG"
+        echo "$marker" >> "$SHELL_CONFIG"
+        echo "$export_line" >> "$SHELL_CONFIG"
+        echo "✅ Successfully updated $SHELL_CONFIG"
         
-        if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
-            echo "" >> "$SHELL_CONFIG"
-            echo "# $tool_name" >> "$SHELL_CONFIG"
-            echo "$export_line" >> "$SHELL_CONFIG"
-            echo "✅ Successfully added to $SHELL_CONFIG"
-            export PATH="$dir_path:$PATH"
-        else
-            echo "🆗 Skipped. You can manually add the line below to your $SHELL_CONFIG:"
-            echo "   $export_line"
-        fi
+        # Update current session
+        export PATH="$dir_path:$PATH"
     fi
 }
 
@@ -49,7 +52,6 @@ setup_conda_env() {
 
     echo "🐍 Setting up Conda Environment..."
 
-    # 1. Strict Check: Is 'conda' available right now?
     if ! command -v conda >/dev/null 2>&1; then
         echo "❌ Error: 'conda' command not found in your PATH."
         echo "   Possible reasons:"
@@ -131,8 +133,6 @@ build_image() {
         return 1
     fi
 
-    # 3. Run the build command
-    #    We use 'set -e' behavior locally by checking the exit code
     if apptainer build --fakeroot "$sif_path" "$def_path"; then
         echo "✅ Build Successful: $sif_path"
         return 0
