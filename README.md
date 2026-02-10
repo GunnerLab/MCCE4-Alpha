@@ -77,14 +77,42 @@ source ~/.bashrc
 ```bash
 conda activate mc4
 ```
-Once that is done, you can test it out using:
+**Usage:**
+```bash
+mc4 <command>
+```
+**Example**
 ```bash
 mc4 which python
 ```
 
-Expected Output
+**Expected Output**
 ```bash
 🚀 Running in Apptainer Production Mode...
+INFO:    fuse2fs not found, will not be able to mount EXT3 filesystems
+/opt/conda/envs/mc4/bin/python
+```
+> [!NOTE] 
+> **Troubleshooting: `apptainer: command not found`**
+> The `mc4` CLI wrapper script functions by executing the command: `apptainer exec <path/to/mcce4-alpha.sif> <command> ...`
+> * **The Cause:** If Apptainer was installed via the **Conda fallback method**, the `apptainer` binary is hidden inside the `mc4` environment. The wrapper script fails because it cannot find `apptainer` in your system PATH.
+> * **The Fix:** You must run `conda activate mc4` to expose the binary before using the CLI.
+
+### Development Mode
+To run the CLI in development mode, use the `-d` flag. This mode mounts your local `MCCE4-Alpha` source code into the container, allowing you to test changes immediately without rebuilding the image. Since the repository is bound to the container, ***developers can create new files or modify existing ones***, and these changes will be reflected inside the container.
+
+**Usage:**
+```bash
+mc4 -d <command>
+```
+
+**Example**
+```bash
+mc4 -d which python
+```
+**Expected Output:**
+```bash
+🔧 Running in Apptainer Development Mode...
 INFO:    fuse2fs not found, will not be able to mount EXT3 filesystems
 /opt/conda/envs/mc4/bin/python
 ```
