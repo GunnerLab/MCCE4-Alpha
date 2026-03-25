@@ -1,0 +1,68 @@
+Bootstrap: docker
+From: condaforge/miniforge3
+
+%labels
+    Author "Julian A. Rendon"
+    Maintainer "Gunner Lab"
+    Description "MCCE4-Alpha Apptainer Environment"
+    Source "https://github.com/GunnerLab/MCCE4-Alpha"
+
+%files
+    # Copy the current directory (project root) into /opt inside the container
+    # NOTE: Run build from project root, or adjust path (e.g., ../ /opt/...)
+    ./ /opt/MCCE4-Alpha
+
+%post
+    # 1. Install System Tools & Apptainer (from your Dockerfile)
+    apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        curl \
+        git \
+        iproute2 \
+        net-tools \
+        openssh-client \
+        sudo \
+        tree \
+        vim \
+        wget \
+        ca-certificates
+
+    # Install Apptainer (Inside the container)
+    cd /tmp
+    wget https://github.com/apptainer/apptainer/releases/download/v1.4.5/apptainer_1.4.5_amd64.deb
+    apt-get install -y ./apptainer_1.4.5_amd64.deb
+    rm apptainer_1.4.5_amd64.deb
+
+    # Clean up apt
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+    # 2. Run the MCCE4 Install Script
+    # We use /opt instead of /home/mc4 because Apptainer runs as *you*,
+    # so /home/mc4 won't exist or be accessible at runtime.
+    cd /opt/MCCE4-Alpha
+    bash ./MCCE_bin/quick_install.sh
+
+    # 3. Create a placeholder strictly for compatibility if scripts hardcode /home/mc4
+    mkdir -p /home/mc4
+    ln -s /opt/MCCE4-Alpha /home/mc4/MCCE4-Alpha
+
+%environment
+    # Set up the environment variables (Runtime)
+    export MCCE4_ROOT="/opt/MCCE4-Alpha"
+    export PATH="${MCCE4_ROOT}/bin:${MCCE4_ROOT}/MCCE_bin:$PATH"
+    export CONDA_DEFAULT_ENV="mc4"
+
+    # Automatically activate Conda when the container runs
+    if [ -f "/opt/conda/etc/profile.d/conda.sh" ]; then
+        . /opt/conda/etc/profile.d/conda.sh
+        conda activate mc4
+    fi
+
+%runscript
+    # This runs when you execute: apptainer run mcce4.sif
+    exec /bin/bash "$@"
+
+%startscript
+    # This runs when you execute: apptainer instance start mcce4.sif <name>
+    # Mimics your CMD ["tail", "-f", "/dev/null"]
+    exec tail -f /dev/null
