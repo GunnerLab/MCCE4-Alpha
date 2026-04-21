@@ -350,6 +350,69 @@ async def analysis_conformers():
     return data
 
 
+@app.get("/api/analysis/dipole")
+async def analysis_dipole():
+    data = analysis_mod.parse_dipole_csv()
+    if "error" in data:
+        raise HTTPException(404, data["error"])
+    return data
+
+
+@app.get("/api/analysis/dipole/status")
+async def dipole_status():
+    """Check if dipole CSV exists or if ms_dipole can be run."""
+    return analysis_mod.can_run_dipole()
+
+
+@app.post("/api/analysis/dipole/run")
+async def dipole_run():
+    """Run ms_dipole ensemble computation and return results."""
+    status = analysis_mod.can_run_dipole()
+    if status["has_csv"]:
+        # Already computed — just return existing data
+        return analysis_mod.parse_dipole_csv()
+    if not status["can_run"]:
+        raise HTTPException(400, f"Missing required files: {', '.join(status['missing'])}")
+
+    await state.broadcast_log(">> Running dipole analysis...")
+
+    # Run in executor to avoid blocking the event loop
+    loop = asyncio.get_event_loop()
+
+    log_messages = []
+    def sync_log(msg):
+        log_messages.append(msg)
+
+    try:
+        data = await loop.run_in_executor(
+            None, lambda: analysis_mod.run_dipole(log_callback=sync_log)
+        )
+    except Exception as e:
+        await state.broadcast_log(f"Dipole error: {e}")
+        raise HTTPException(500, str(e))
+
+    # Broadcast collected log messages
+    for msg in log_messages:
+        await state.broadcast_log(msg)
+
+    if "error" in data:
+        await state.broadcast_log(f"Dipole error: {data['error']}")
+        raise HTTPException(500, data["error"])
+
+    await state.broadcast_log(">> Dipole analysis complete.")
+    return data
+
+
+@app.get("/api/pdb/step2_content")
+async def get_step2_pdb_content():
+    """Serve step2_out.pdb content for 3D dipole visualization."""
+    p = "step2_out.pdb"
+    if not os.path.isfile(p):
+        raise HTTPException(404, "step2_out.pdb not found")
+    with open(p, "r") as f:
+        return {"content": f.read(), "filename": "step2_out.pdb"}
+
+
 # ══════════════════════════════════════════════════════════════════
 # WEBSOCKET
 # ══════════════════════════════════════════════════════════════════

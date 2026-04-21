@@ -75,9 +75,12 @@ def print_header(title):
 
 
 def print_single_state(results, label=""):
-    """Print formatted single-state dipole results."""
+    """Print formatted single-state dipole results with coordinates."""
     if label:
         print_header(label)
+
+    center = results["center"]
+    print(f"\n  Geometric center: ({center[0]:.2f}, {center[1]:.2f}, {center[2]:.2f})")
 
     for name, key in [("Backbone", "backbone_dipole"),
                       ("Ionizable", "ionizable_dipole"),
@@ -86,8 +89,8 @@ def print_single_state(results, label=""):
         mag = np.linalg.norm(mu)
         direction = mu / mag if mag > 0.1 else np.zeros(3)
         print(f"\n  {name} Dipole Moment:")
-        print(f"    mu = ({mu[0]:8.2f}, {mu[1]:8.2f}, {mu[2]:8.2f}) D")
         print(f"    |mu| = {mag:.2f} D")
+        print(f"    mu = ({mu[0]:8.2f}, {mu[1]:8.2f}, {mu[2]:8.2f}) D")
         if mag > 0.1:
             print(f"    dir  = ({direction[0]:.4f}, {direction[1]:.4f}, {direction[2]:.4f})")
 
@@ -99,6 +102,7 @@ def print_single_state(results, label=""):
     print(f"    Eigenvalues: ({eigvals[0]:.2f}, {eigvals[1]:.2f}, {eigvals[2]:.2f})")
 
     print(f"\n  Net Charge: {results['net_charge']:.3f} e")
+    print(f"  Arrow direction: (-) to (+)")
     print()
 
 
@@ -225,8 +229,10 @@ PyMOL controls (type 'dipole_help' after loading the .pml script):
         generate_pymol_script(pdb_file, results, pml_path,
                               ph_index=None, arrow_scale=args.arrow_scale)
 
+        pse_path = pml_path.replace(".pml", ".pse")
         print(f"  Output:")
         print(f"    PyMOL script  {pml_path}")
+        print(f"    PyMOL session {pse_path}  (open directly in PyMOL)")
         print(f"\n  -> pymol {pml_path}")
         print(f"  -> Type 'dipole_help' in PyMOL for toggle commands\n")
         return
@@ -292,14 +298,22 @@ PyMOL controls (type 'dipole_help' after loading the .pml script):
 
     ph_idx = np.argmin(np.abs(ph_values - args.ph))
     actual_ph = ph_values[ph_idx]
-    pdb_file = args.pdb or step2_path
+    pdb_file = args.pdb or find_file(mcce_dir, "prot_center.pdb", "prot.pdb")
+    if not pdb_file:
+        print(f"\n  Error: No protein PDB found for visualization.")
+        print(f"  Looked for prot_center.pdb and prot.pdb in {os.path.abspath(mcce_dir)}")
+        print(f"  Please provide one with: ms_dipole.py --pdb <your_protein.pdb>")
+        sys.exit(1)
+    print(f"  Protein PDB for visualization: {os.path.basename(pdb_file)}")
     pml_path = f"{args.output_prefix}_pH{actual_ph:.0f}_pymol.pml"
     generate_pymol_script(pdb_file, results, pml_path,
                           ph_index=ph_idx, arrow_scale=args.arrow_scale)
 
+    pse_path = pml_path.replace(".pml", ".pse")
     print(f"  Output:")
     print(f"    pH scan CSV   {csv_path}")
     print(f"    PyMOL script  {pml_path}  (pH {actual_ph:.1f})")
+    print(f"    PyMOL session {pse_path}  (open directly in PyMOL)")
     print(f"\n  -> pymol {pml_path}")
     print(f"  -> Type 'dipole_help' in PyMOL for toggle commands\n")
 

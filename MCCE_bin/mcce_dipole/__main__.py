@@ -58,8 +58,8 @@ Examples:
                         help="PDB for PyMOL display (default: step2_out.pdb)")
     parser.add_argument("--ph", type=float, default=7.0,
                         help="pH for PyMOL snapshot (default: 7.0)")
-    parser.add_argument("--arrow_scale", type=float, default=0.05,
-                        help="Arrow length: Debye to Angstrom (default: 0.05)")
+    parser.add_argument("--arrow_scale", type=float, default=0.1,
+                        help="Arrow length: Debye to Angstrom (default: 0.1)")
     parser.add_argument("-o", "--output_prefix", type=str, default="dipole",
                         help="Output file prefix (default: 'dipole')")
 

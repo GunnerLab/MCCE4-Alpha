@@ -101,7 +101,7 @@ class PipelineManager:
             param_env += f",EXTRA={cfg.extra_tpl}"
 
         if cfg.step1.enabled:
-            cmd = ["python", f"{mcce_home}/bin/step1.py", cfg.pdb_file, "-d", diel]
+            cmd = ["python", f"{mcce_home}/bin/step1.py", "prot.pdb", "-d", diel]
             if cfg.step1.dry:
                 cmd.append("--dry")
             cmd.append(param_env)
@@ -149,6 +149,61 @@ class PipelineManager:
 
         return commands
 
+    async def _prepare_pdb(self) -> bool:
+        """Create prot.pdb symlink and optionally center the protein."""
+        cfg = self.config
+        pdb_path = os.path.abspath(cfg.pdb_file)
+
+        if not os.path.isfile(pdb_path):
+            await self._log(f"ERROR: PDB file not found: {pdb_path}")
+            return False
+
+        # Create prot.pdb symlink in the working directory
+        prot_link = os.path.join(os.getcwd(), "prot.pdb")
+        try:
+            if os.path.exists(prot_link) or os.path.islink(prot_link):
+                os.remove(prot_link)
+            os.symlink(pdb_path, prot_link)
+            await self._log(f">> Linked prot.pdb -> {pdb_path}")
+        except OSError as e:
+            await self._log(f"ERROR: Failed to create prot.pdb symlink: {e}")
+            return False
+
+        # Optionally center the protein using orientation.py
+        if cfg.step1.center_protein:
+            orientation_py = os.path.join(cfg.mcce_home, "bin", "orientation.py")
+            if not os.path.isfile(orientation_py):
+                await self._log(f"WARNING: orientation.py not found at {orientation_py}")
+                return True
+
+            await self._log(">> Centering protein with orientation.py...")
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "python", orientation_py, "prot.pdb",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                )
+                stdout, _ = await proc.communicate()
+                if stdout:
+                    for line in stdout.decode("utf-8", errors="replace").strip().split("\n"):
+                        await self._log(line)
+
+                if proc.returncode == 0:
+                    # orientation.py produces prot_center.pdb — replace prot.pdb with it
+                    centered = os.path.join(os.getcwd(), "prot_center.pdb")
+                    if os.path.isfile(centered):
+                        os.remove(prot_link)
+                        os.rename(centered, prot_link)
+                        await self._log(">> prot.pdb replaced with centered structure")
+                    else:
+                        await self._log("WARNING: prot_center.pdb not produced")
+                else:
+                    await self._log(f"WARNING: orientation.py exited with code {proc.returncode}")
+            except Exception as e:
+                await self._log(f"WARNING: orientation.py failed: {e}")
+
+        return True
+
     async def run(self, from_step: int = 0) -> None:
         """Run the pipeline from the given step index."""
         if self.state == PipelineState.RUNNING:
@@ -162,6 +217,13 @@ class PipelineManager:
                 await self._log(f"ERROR: {err}")
             self.state = PipelineState.FAILED
             return
+
+        # Prepare prot.pdb before building commands
+        if from_step == 0:
+            ok = await self._prepare_pdb()
+            if not ok:
+                self.state = PipelineState.FAILED
+                return
 
         # Build commands
         self._command_tuples = self.build_commands()

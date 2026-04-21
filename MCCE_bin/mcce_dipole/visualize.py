@@ -1,183 +1,138 @@
 """
-visualize.py - Generate PyMOL .pml scripts for dipole visualization.
+visualize.py - PyMOL visualization for MCCE4 dipole moments.
 
-CGO arrow = CYLINDER (shaft) + CONE (arrowhead).
-Uses standard CGO primitives for PyMOL visualization.
+Chemistry convention dipole arrows:
+  (+) end = cross/plus mark (tail) -- colored in + color
+  (-) end = arrowhead (tip)        -- colored in - color
+
+Each dipole arrow is two-toned: + color on one half, - color on the other.
 
 Color scheme:
-  - Backbone dipole:   blue    (0.3, 0.5, 1.0)
-  - Ionizable dipole:  red     (1.0, 0.2, 0.2)
-  - Full dipole:       green   (0.2, 0.9, 0.3)
-  - Quadrupole axes:   orange  (1.0, 0.7, 0.1)
+  backbone_dipole:   yellow (+) / dark gold (-)
+  ionizable_dipole:  green (+) / magenta (-)
+  full_dipole:       blue (+) / red (-)
+  quadrupole:        cyan axes
 """
 
+import os
+import subprocess
 import numpy as np
 from . import E_ANG_TO_DEBYE
 
-COLORS = {
-    "backbone":   (0.3, 0.5, 1.0),
-    "ionizable":  (1.0, 0.2, 0.2),
-    "full":       (0.2, 0.9, 0.3),
-    "quadrupole": (1.0, 0.7, 0.1),
+CGO_CYLINDER = 9.0
+
+# Two-tone color scheme: (positive_color, negative_color)
+DIPOLE_COLORS = {
+    "backbone":   ((1.0, 0.85, 0.0),  (0.8, 0.55, 0.0)),   # yellow / dark gold
+    "ionizable":  ((0.0, 0.8, 0.2),   (0.85, 0.2, 0.85)),  # green / magenta
+    "full":       ((0.3, 0.5, 1.0),   (1.0, 0.2, 0.2)),    # blue / red
 }
+
+QUAD_COLOR = (0.0, 0.85, 1.0)  # cyan
 
 
 def _normalize(v):
     mag = np.linalg.norm(v)
-    if mag < 1e-10:
-        return np.zeros(3)
-    return v / mag
+    return v / mag if mag > 1e-10 else np.zeros(3)
 
 
-def _cgo_arrow(origin, direction, magnitude, color,
-               shaft_radius=0.6, tip_radius=1.4, tip_length=3.0,
-               scale=0.1):
+def _perp_vectors(d):
+    """Two unit vectors perpendicular to d and to each other."""
+    ref = np.array([1.0, 0.0, 0.0]) if abs(d[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+    u = np.cross(d, ref)
+    u /= np.linalg.norm(u)
+    v = np.cross(d, u)
+    return u, v
+
+
+def _cgo_dipole(center, direction, magnitude, color_pos, color_neg,
+                shaft_radius=0.5, head_radius=1.4, head_fraction=0.12,
+                cross_size=2.0, cross_radius=0.3,
+                scale=0.1, min_length=5.0, n_taper=6, n_grad=8):
     """
-    CGO arrow: CYLINDER shaft + CONE arrowhead.
-    Arrow length is proportional to magnitude (no minimum clamp).
+    Gradient two-color dipole arrow with cross at (+) and arrowhead at (-).
+
+    Color smoothly transitions from (+) color at the positive end to
+    (-) color at the negative end. Each CYLINDER segment uses PyMOL's
+    built-in two-color interpolation for smooth blending.
+
+    Chemistry convention: arrow from (+) toward (-).
+    mu vector points from (-) to (+), so:
+      (+) end = center + direction * half   (cross mark here)
+      (-) end = center - direction * half   (arrowhead here)
     """
-    length = magnitude * scale
-    shaft_end = origin + direction * length
-    cone_tip = shaft_end + direction * tip_length
-    r, g, b = color
+    half = max(magnitude * scale, min_length) * 0.5
+    head_len = half * head_fraction * 2
 
-    cgo = "[\n"
-    cgo += f"    CYLINDER,\n"
-    cgo += f"    {origin[0]:.3f}, {origin[1]:.3f}, {origin[2]:.3f},\n"
-    cgo += f"    {shaft_end[0]:.3f}, {shaft_end[1]:.3f}, {shaft_end[2]:.3f},\n"
-    cgo += f"    {shaft_radius:.3f},\n"
-    cgo += f"    {r:.3f}, {g:.3f}, {b:.3f},\n"
-    cgo += f"    {r:.3f}, {g:.3f}, {b:.3f},\n"
-    cgo += f"    CONE,\n"
-    cgo += f"    {shaft_end[0]:.3f}, {shaft_end[1]:.3f}, {shaft_end[2]:.3f},\n"
-    cgo += f"    {cone_tip[0]:.3f}, {cone_tip[1]:.3f}, {cone_tip[2]:.3f},\n"
-    cgo += f"    {tip_radius:.3f}, 0.0,\n"
-    cgo += f"    {r:.3f}, {g:.3f}, {b:.3f},\n"
-    cgo += f"    {r:.3f}, {g:.3f}, {b:.3f},\n"
-    cgo += f"    1.0, 1.0,\n"
-    cgo += "]"
-    return cgo
+    pos_tip = center + direction * half            # (+) end
+    neg_tip = center - direction * half            # (-) end
+    head_start = center - direction * (half - head_len)  # arrowhead starts
+
+    rp, gp, bp = color_pos
+    rn, gn, bn = color_neg
+    full_len = half * 2
+
+    vals = []
+
+    # Gradient shaft: n_grad segments from pos_tip to head_start
+    # Color goes from color_pos at pos_tip to color_neg at head_start
+    shaft_len = full_len - head_len
+    for i in range(n_grad):
+        # Fraction along the shaft (0 = pos_tip, 1 = head_start)
+        t0 = i / n_grad
+        t1 = (i + 1) / n_grad
+        p0 = pos_tip - direction * (shaft_len * t0)
+        p1 = pos_tip - direction * (shaft_len * t1)
+        # Interpolate colors
+        r0 = rp + (rn - rp) * t0
+        g0 = gp + (gn - gp) * t0
+        b0 = bp + (bn - bp) * t0
+        r1 = rp + (rn - rp) * t1
+        g1 = gp + (gn - gp) * t1
+        b1 = bp + (bn - bp) * t1
+        vals.extend([CGO_CYLINDER,
+                     p0[0], p0[1], p0[2],
+                     p1[0], p1[1], p1[2],
+                     shaft_radius,
+                     r0, g0, b0,
+                     r1, g1, b1])
+
+    # Arrowhead: tapered cylinders from head_start to neg_tip (full neg color)
+    for i in range(n_taper):
+        f0 = i / n_taper
+        f1 = (i + 1) / n_taper
+        s0 = head_start + (neg_tip - head_start) * f0
+        s1 = head_start + (neg_tip - head_start) * f1
+        r_seg = head_radius * (1.0 - (f0 + f1) * 0.5)
+        if r_seg < 0.05:
+            r_seg = 0.05
+        vals.extend([CGO_CYLINDER,
+                     s0[0], s0[1], s0[2],
+                     s1[0], s1[1], s1[2],
+                     r_seg, rn, gn, bn, rn, gn, bn])
+
+    # (+) cross mark: two short perpendicular bars at pos_tip
+    u, v = _perp_vectors(direction)
+    for perp in [u, v]:
+        bar_start = pos_tip - perp * cross_size * 0.5
+        bar_end = pos_tip + perp * cross_size * 0.5
+        vals.extend([CGO_CYLINDER,
+                     bar_start[0], bar_start[1], bar_start[2],
+                     bar_end[0], bar_end[1], bar_end[2],
+                     cross_radius, rp, gp, bp, rp, gp, bp])
+
+    return vals
 
 
-# ---------------------------------------------------------------------------
-# PyMOL toggle commands
-# ---------------------------------------------------------------------------
-_PYMOL_TOGGLE_COMMANDS = r'''
-_dipole_objects = []
-_quad_objects = []
-
-def _register_dipole(name):
-    _dipole_objects.append(name)
-
-def _register_quad(name):
-    _quad_objects.append(name)
-
-def show_backbone(quiet=0):
-    cmd.enable("backbone_dipole")
-    if not int(quiet): print("  Showing backbone dipole (blue)")
-cmd.extend("show_backbone", show_backbone)
-
-def hide_backbone(quiet=0):
-    cmd.disable("backbone_dipole")
-    if not int(quiet): print("  Hidden backbone dipole")
-cmd.extend("hide_backbone", hide_backbone)
-
-def show_ionizable(quiet=0):
-    cmd.enable("ionizable_dipole")
-    if not int(quiet): print("  Showing ionizable dipole (red)")
-cmd.extend("show_ionizable", show_ionizable)
-
-def hide_ionizable(quiet=0):
-    cmd.disable("ionizable_dipole")
-    if not int(quiet): print("  Hidden ionizable dipole")
-cmd.extend("hide_ionizable", hide_ionizable)
-
-def show_full(quiet=0):
-    cmd.enable("full_dipole")
-    if not int(quiet): print("  Showing full dipole (green)")
-cmd.extend("show_full", show_full)
-
-def hide_full(quiet=0):
-    cmd.disable("full_dipole")
-    if not int(quiet): print("  Hidden full dipole")
-cmd.extend("hide_full", hide_full)
-
-def show_quadrupole(quiet=0):
-    for obj in _quad_objects:
-        cmd.enable(obj)
-    if not int(quiet): print("  Showing quadrupole axes (orange)")
-cmd.extend("show_quadrupole", show_quadrupole)
-
-def hide_quadrupole(quiet=0):
-    for obj in _quad_objects:
-        cmd.disable(obj)
-    if not int(quiet): print("  Hidden quadrupole axes")
-cmd.extend("hide_quadrupole", hide_quadrupole)
-
-def show_all_dipoles():
-    for obj in _dipole_objects + _quad_objects:
-        cmd.enable(obj)
-    print("  Showing all dipoles and quadrupole axes")
-cmd.extend("show_all_dipoles", show_all_dipoles)
-
-def hide_all_dipoles():
-    for obj in _dipole_objects + _quad_objects:
-        cmd.disable(obj)
-    print("  Hidden all dipoles and quadrupole axes")
-cmd.extend("hide_all_dipoles", hide_all_dipoles)
-
-def solo_backbone():
-    hide_all_dipoles()
-    show_backbone(quiet=1)
-    print("  Solo: backbone dipole (blue)")
-cmd.extend("solo_backbone", solo_backbone)
-
-def solo_ionizable():
-    hide_all_dipoles()
-    show_ionizable(quiet=1)
-    print("  Solo: ionizable dipole (red)")
-cmd.extend("solo_ionizable", solo_ionizable)
-
-def solo_full():
-    hide_all_dipoles()
-    show_full(quiet=1)
-    print("  Solo: full protein dipole (green)")
-cmd.extend("solo_full", solo_full)
-
-def solo_quadrupole():
-    hide_all_dipoles()
-    show_quadrupole(quiet=1)
-    print("  Solo: quadrupole axes (orange)")
-cmd.extend("solo_quadrupole", solo_quadrupole)
-
-def dipole_help():
-    print("")
-    print("  +------------------------------------------------------+")
-    print("  |          MCCE4 Dipole Visualization Controls          |")
-    print("  +------------------------------------------------------+")
-    print("  |  show_backbone  / hide_backbone    (blue)             |")
-    print("  |  show_ionizable / hide_ionizable   (red)              |")
-    print("  |  show_full      / hide_full        (green)            |")
-    print("  |  show_quadrupole/ hide_quadrupole  (orange)           |")
-    print("  |  show_all_dipoles / hide_all_dipoles                  |")
-    print("  +------------------------------------------------------+")
-    print("  |  solo_backbone  / solo_ionizable / solo_full          |")
-    print("  |  solo_quadrupole                                      |")
-    print("  +------------------------------------------------------+")
-    print("  |  dipole_help      -- show this menu                   |")
-    print("  +------------------------------------------------------+")
-    print("")
-cmd.extend("dipole_help", dipole_help)
-'''
+def _format_cgo(vals):
+    return "[" + ", ".join(f"{v:.3f}" for v in vals) + "]"
 
 
 def generate_pymol_script(protein_pdb, results, output_path, ph_index=None,
                           arrow_scale=0.1):
     """
-    Generate a .pml script for PyMOL visualization.
-
-    All 4 dipole/quadrupole moments are created and visible by default.
-    Toggle in PyMOL with 'dipole_help'.
+    Generate .pml with two-color dipole arrows.
+    (+) end has cross mark, (-) end has arrowhead.
     """
     center = results["center"]
 
@@ -186,9 +141,8 @@ def generate_pymol_script(protein_pdb, results, output_path, ph_index=None,
         mu_ion = results["ionizable_dipole"][ph_index]
         mu_full = results["full_dipole"][ph_index]
         Q_eigvals = results["quadrupole_eigenvalues"][ph_index]
-        if "quadrupole_eigenvectors" in results:
-            Q_eigvecs = results["quadrupole_eigenvectors"]
-        else:
+        Q_eigvecs = results.get("quadrupole_eigenvectors", None)
+        if Q_eigvecs is None:
             Q = results["quadrupole_tensor"][ph_index]
             Q_eigvals, Q_eigvecs = np.linalg.eigh(Q)
         ph_label = f"pH {results['ph_values'][ph_index]:.1f}"
@@ -206,27 +160,21 @@ def generate_pymol_script(protein_pdb, results, output_path, ph_index=None,
     mag_ion = np.linalg.norm(mu_ion)
     mag_full = np.linalg.norm(mu_full)
 
+    dir_bb = _normalize(mu_bb) if mag_bb > 0.1 else np.zeros(3)
+    dir_ion = _normalize(mu_ion) if mag_ion > 0.1 else np.zeros(3)
+    dir_full = _normalize(mu_full) if mag_full > 0.1 else np.zeros(3)
+
     L = []
-    L.append("# ============================================================")
     L.append(f"# MCCE4 Dipole Moment Visualization -- {ph_label}")
     L.append(f"# Generated by mcce_dipole v1.0")
-    L.append("# Type 'dipole_help' in PyMOL for toggle commands")
-    L.append("# ============================================================")
+    L.append(f"# Convention: cross (+) --|--======> arrowhead (-)")
     L.append("")
-    L.append(f"# Backbone dipole:   {mag_bb:.1f} D")
-    L.append(f"# Ionizable dipole:  {mag_ion:.1f} D")
-    L.append(f"# Full dipole:       {mag_full:.1f} D")
-    L.append(f"# Net charge:        {net_q:.2f} e")
-    L.append("")
-    L.append("from pymol.cgo import *")
     L.append("from pymol import cmd")
     L.append("")
 
-    # Toggle commands
-    L.append(_PYMOL_TOGGLE_COMMANDS)
-
-    # Load protein — show cartoon only, hide everything else
+    # 1. Protein
     L.append(f'cmd.load("{protein_pdb}", "protein")')
+    L.append('cmd.dss("protein")')
     L.append('cmd.hide("everything", "protein")')
     L.append('cmd.show("cartoon", "protein")')
     L.append('cmd.set("cartoon_fancy_helices", 1)')
@@ -237,70 +185,52 @@ def generate_pymol_script(protein_pdb, results, output_path, ph_index=None,
     L.append("")
 
     # Center marker
-    L.append(f'cmd.pseudoatom("prot_center", pos=[{center[0]:.3f}, {center[1]:.3f}, {center[2]:.3f}])')
-    L.append('cmd.show("spheres", "prot_center")')
-    L.append('cmd.set("sphere_scale", 0.8, "prot_center")')
-    L.append('cmd.color("white", "prot_center")')
+    L.append(f'cmd.pseudoatom("center_marker", '
+             f'pos=[{center[0]:.3f}, {center[1]:.3f}, {center[2]:.3f}])')
+    L.append('cmd.show("spheres", "center_marker")')
+    L.append('cmd.set("sphere_scale", 0.5, "center_marker")')
+    L.append('cmd.color("white", "center_marker")')
     L.append("")
 
     # Dipole arrows
     dipoles = [
-        ("backbone_dipole",  mu_bb,  mag_bb,  COLORS["backbone"]),
-        ("ionizable_dipole", mu_ion, mag_ion, COLORS["ionizable"]),
-        ("full_dipole",      mu_full, mag_full, COLORS["full"]),
+        ("backbone_dipole",  mu_bb,  mag_bb,  dir_bb,
+         DIPOLE_COLORS["backbone"],  "yellow(+) / gold(-)"),
+        ("ionizable_dipole", mu_ion, mag_ion, dir_ion,
+         DIPOLE_COLORS["ionizable"], "green(+) / magenta(-)"),
+        ("full_dipole",      mu_full, mag_full, dir_full,
+         DIPOLE_COLORS["full"],      "blue(+) / red(-)"),
     ]
 
-    for obj_name, mu_vec, mag, color in dipoles:
+    for obj_name, mu_vec, mag, direction, (c_pos, c_neg), color_desc in dipoles:
         if mag < 0.1:
-            L.append(f"# {obj_name}: magnitude too small ({mag:.2f} D), skipping")
+            L.append(f"# {obj_name}: too small ({mag:.2f} D), skipped")
             continue
 
-        direction = _normalize(mu_vec)
-        cgo_str = _cgo_arrow(center, direction, mag, color, scale=arrow_scale)
+        cgo = _cgo_dipole(center, direction, mag, c_pos, c_neg,
+                          scale=arrow_scale)
 
-        L.append(f"# {obj_name}: {mag:.1f} D")
-        L.append(f"{obj_name}_cgo = {cgo_str}")
-        L.append(f'cmd.load_cgo({obj_name}_cgo, "{obj_name}")')
-        L.append(f'_register_dipole("{obj_name}")')
+        L.append(f"# {obj_name}: {mag:.1f} D  {color_desc}")
+        L.append(f"cmd.load_cgo({_format_cgo(cgo)}, '{obj_name}')")
         L.append("")
 
-    # Quadrupole axes (cylinders only)
+    # Quadrupole (cyan, 3 axes as single object)
     if Q_eigvecs is not None:
-        L.append("# Quadrupole principal axes")
+        r, g, b = QUAD_COLOR
+        quad_cgo = []
         for i in range(3):
             eigval = Q_eigvals[i]
             eigvec = Q_eigvecs[:, i]
-            axis_length = abs(eigval) * 0.02
-            if axis_length < 3.0:
-                axis_length = 3.0
-
-            direction = _normalize(eigvec)
-            r, g, b = COLORS["quadrupole"]
-
-            start = center - direction * axis_length
-            end = center + direction * axis_length
-
-            L.append(f"quad_axis_{i}_cgo = [")
-            L.append(f"    CYLINDER,")
-            L.append(f"    {start[0]:.3f}, {start[1]:.3f}, {start[2]:.3f},")
-            L.append(f"    {end[0]:.3f}, {end[1]:.3f}, {end[2]:.3f},")
-            L.append(f"    0.35,")
-            L.append(f"    {r:.3f}, {g:.3f}, {b:.3f},")
-            L.append(f"    {r:.3f}, {g:.3f}, {b:.3f},")
-            L.append(f"]")
-            L.append(f'cmd.load_cgo(quad_axis_{i}_cgo, "quad_axis_{i}")')
-            L.append(f'_register_quad("quad_axis_{i}")')
-
-        L.append("")
-
-    # Group
-    all_obj = []
-    for obj_name, _, mag, _ in dipoles:
-        if mag >= 0.1:
-            all_obj.append(obj_name)
-    all_obj.extend([f"quad_axis_{i}" for i in range(3)])
-    if all_obj:
-        L.append(f'cmd.group("dipoles", "{" ".join(all_obj)}")')
+            axis_len = max(abs(eigval) * 0.02, 3.0)
+            dv = _normalize(eigvec)
+            start = center - dv * axis_len
+            end = center + dv * axis_len
+            quad_cgo.extend([CGO_CYLINDER,
+                             start[0], start[1], start[2],
+                             end[0], end[1], end[2],
+                             0.3, r, g, b, r, g, b])
+        L.append(f"# quadrupole: 3 principal axes (cyan)")
+        L.append(f"cmd.load_cgo({_format_cgo(quad_cgo)}, 'quadrupole')")
         L.append("")
 
     # Rendering
@@ -311,20 +241,81 @@ def generate_pymol_script(protein_pdb, results, output_path, ph_index=None,
     L.append('cmd.zoom("protein", buffer=10)')
     L.append("")
 
-    # Print summary
+    # Summary with coordinates
     L.append(f'print("")')
     L.append(f'print("  MCCE4 Dipole Visualization -- {ph_label}")')
+    L.append(f'print("  Convention: cross (+) --|--======> arrow (-)")')
     L.append(f'print("  -----------------------------------------")')
-    L.append(f'print("  Backbone:   {mag_bb:7.1f} D  (blue)")')
-    L.append(f'print("  Ionizable:  {mag_ion:7.1f} D  (red)")')
-    L.append(f'print("  Full:       {mag_full:7.1f} D  (green)")')
-    L.append(f'print("  Net charge: {net_q:7.2f} e")')
+    L.append(f'print("  Geometric center: ({center[0]:.2f}, {center[1]:.2f}, {center[2]:.2f})")')
     L.append(f'print("")')
-    L.append(f'print("  Type dipole_help for toggle commands")')
+    L.append(f'print("  backbone_dipole:  |mu| = {mag_bb:7.1f} D")')
+    L.append(f'print("    yellow (+) / gold (-)")')
+    L.append(f'print("    mu  = ({mu_bb[0]:.2f}, {mu_bb[1]:.2f}, {mu_bb[2]:.2f}) D")')
+    L.append(f'print("    dir = ({dir_bb[0]:.4f}, {dir_bb[1]:.4f}, {dir_bb[2]:.4f})")')
     L.append(f'print("")')
+    L.append(f'print("  ionizable_dipole: |mu| = {mag_ion:7.1f} D")')
+    L.append(f'print("    green (+) / magenta (-)")')
+    L.append(f'print("    mu  = ({mu_ion[0]:.2f}, {mu_ion[1]:.2f}, {mu_ion[2]:.2f}) D")')
+    L.append(f'print("    dir = ({dir_ion[0]:.4f}, {dir_ion[1]:.4f}, {dir_ion[2]:.4f})")')
+    L.append(f'print("")')
+    L.append(f'print("  full_dipole:      |mu| = {mag_full:7.1f} D")')
+    L.append(f'print("    blue (+) / red (-)")')
+    L.append(f'print("    mu  = ({mu_full[0]:.2f}, {mu_full[1]:.2f}, {mu_full[2]:.2f}) D")')
+    L.append(f'print("    dir = ({dir_full[0]:.4f}, {dir_full[1]:.4f}, {dir_full[2]:.4f})")')
+    L.append(f'print("")')
+    L.append(f'print("  quadrupole:       3 axes (cyan)")')
+    L.append(f'print("    eigenvalues = ({Q_eigvals[0]:.1f}, {Q_eigvals[1]:.1f}, {Q_eigvals[2]:.1f}) e*A^2")')
+    L.append(f'print("")')
+    L.append(f'print("  Net charge: {net_q:.2f} e")')
+    L.append(f'print("")')
+
+    # Toggle commands
+    L.append("try:")
+    L.append("    def _solo(keep):")
+    L.append('        for o in ["backbone_dipole","ionizable_dipole","full_dipole","quadrupole"]:')
+    L.append("            cmd.disable(o) if o != keep else cmd.enable(o)")
+    L.append('    def show_backbone(): cmd.enable("backbone_dipole")')
+    L.append('    def hide_backbone(): cmd.disable("backbone_dipole")')
+    L.append('    def show_ionizable(): cmd.enable("ionizable_dipole")')
+    L.append('    def hide_ionizable(): cmd.disable("ionizable_dipole")')
+    L.append('    def show_full(): cmd.enable("full_dipole")')
+    L.append('    def hide_full(): cmd.disable("full_dipole")')
+    L.append('    def show_quadrupole(): cmd.enable("quadrupole")')
+    L.append('    def hide_quadrupole(): cmd.disable("quadrupole")')
+    L.append('    def show_all_dipoles():')
+    L.append('        for o in ["backbone_dipole","ionizable_dipole","full_dipole","quadrupole"]: cmd.enable(o)')
+    L.append('    def hide_all_dipoles():')
+    L.append('        for o in ["backbone_dipole","ionizable_dipole","full_dipole","quadrupole"]: cmd.disable(o)')
+    L.append('    def solo_backbone(): _solo("backbone_dipole")')
+    L.append('    def solo_ionizable(): _solo("ionizable_dipole")')
+    L.append('    def solo_full(): _solo("full_dipole")')
+    L.append('    def solo_quadrupole(): _solo("quadrupole")')
+    L.append('    for fn in [show_backbone, hide_backbone, show_ionizable, hide_ionizable,')
+    L.append('               show_full, hide_full, show_quadrupole, hide_quadrupole,')
+    L.append('               show_all_dipoles, hide_all_dipoles,')
+    L.append('               solo_backbone, solo_ionizable, solo_full, solo_quadrupole]:')
+    L.append('        cmd.extend(fn.__name__, fn)')
+    L.append("except:")
+    L.append("    pass")
+    L.append("")
 
     with open(output_path, "w") as fh:
         fh.write("\n".join(L) + "\n")
+
+    # Generate .pse by running PyMOL headlessly
+    pse_path = output_path.replace(".pml", ".pse")
+    abs_pml = os.path.abspath(output_path)
+    abs_pse = os.path.abspath(pse_path)
+    try:
+        subprocess.run(
+            ["pymol", "-cq", abs_pml, "-d", f'cmd.save("{abs_pse}")'],
+            capture_output=True, timeout=60,
+        )
+    except FileNotFoundError:
+        pass  # pymol not installed; .pml still usable
+    except subprocess.TimeoutExpired:
+        pass
+
     return output_path
 
 

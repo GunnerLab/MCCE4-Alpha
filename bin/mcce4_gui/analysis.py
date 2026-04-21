@@ -260,6 +260,173 @@ def parse_head3_lst(path: str = "head3.lst") -> dict:
     return {"conformers": conformers}
 
 
+def parse_dipole_csv(path: str = "dipole_ph_scan.csv") -> dict:
+    """
+    Parse dipole_ph_scan.csv produced by ms_dipole.py.
+
+    Returns:
+        {
+            "ph_values": [0.0, 1.0, ...],
+            "backbone_D": [34.21, ...],
+            "ionizable_D": [154.79, ...],
+            "full_D": [162.34, ...],
+            "net_charge": [10.986, ...],
+            "arrows": {
+                "backbone":  [{"neg": [x,y,z], "pos": [x,y,z]}, ...],
+                "ionizable": [{"neg": [x,y,z], "pos": [x,y,z]}, ...],
+                "full":      [{"neg": [x,y,z], "pos": [x,y,z]}, ...],
+            },
+            "vectors": {
+                "backbone":  [[x,y,z], ...],
+                "ionizable": [[x,y,z], ...],
+                "full":      [[x,y,z], ...],
+            },
+            "quadrupole_eigenvalues": [[e1,e2,e3], ...],
+        }
+    """
+    import csv
+
+    if not os.path.isfile(path):
+        return {"error": f"File not found: {path}"}
+
+    with open(path, "r") as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+
+    if not rows:
+        return {"error": "dipole_ph_scan.csv is empty"}
+
+    ph_values = []
+    backbone_D = []
+    ionizable_D = []
+    full_D = []
+    net_charge = []
+    arrows_bb = []
+    arrows_ion = []
+    arrows_full = []
+    vectors_bb = []
+    vectors_ion = []
+    vectors_full = []
+    quad_eig = []
+
+    for row in rows:
+        ph_values.append(float(row["pH"]))
+        backbone_D.append(float(row["backbone_D"]))
+        ionizable_D.append(float(row["ionizable_D"]))
+        full_D.append(float(row["full_D"]))
+        net_charge.append(float(row["net_charge"]))
+
+        arrows_bb.append({
+            "neg": [float(row["bb_neg_x"]), float(row["bb_neg_y"]), float(row["bb_neg_z"])],
+            "pos": [float(row["bb_pos_x"]), float(row["bb_pos_y"]), float(row["bb_pos_z"])],
+        })
+        arrows_ion.append({
+            "neg": [float(row["ion_neg_x"]), float(row["ion_neg_y"]), float(row["ion_neg_z"])],
+            "pos": [float(row["ion_pos_x"]), float(row["ion_pos_y"]), float(row["ion_pos_z"])],
+        })
+        arrows_full.append({
+            "neg": [float(row["full_neg_x"]), float(row["full_neg_y"]), float(row["full_neg_z"])],
+            "pos": [float(row["full_pos_x"]), float(row["full_pos_y"]), float(row["full_pos_z"])],
+        })
+        vectors_bb.append([float(row["bb_x"]), float(row["bb_y"]), float(row["bb_z"])])
+        vectors_ion.append([float(row["ion_x"]), float(row["ion_y"]), float(row["ion_z"])])
+        vectors_full.append([float(row["full_x"]), float(row["full_y"]), float(row["full_z"])])
+        quad_eig.append([float(row["Q_eig1"]), float(row["Q_eig2"]), float(row["Q_eig3"])])
+
+    return {
+        "ph_values": ph_values,
+        "backbone_D": backbone_D,
+        "ionizable_D": ionizable_D,
+        "full_D": full_D,
+        "net_charge": net_charge,
+        "arrows": {
+            "backbone": arrows_bb,
+            "ionizable": arrows_ion,
+            "full": arrows_full,
+        },
+        "vectors": {
+            "backbone": vectors_bb,
+            "ionizable": vectors_ion,
+            "full": vectors_full,
+        },
+        "quadrupole_eigenvalues": quad_eig,
+    }
+
+
+def can_run_dipole() -> dict:
+    """Check whether ms_dipole can be run (required files exist, CSV does not)."""
+    has_csv = os.path.isfile("dipole_ph_scan.csv")
+    has_step2 = os.path.isfile("step2_out.pdb")
+    has_head3 = os.path.isfile("head3.lst")
+    has_fort38 = os.path.isfile("fort.38")
+    ready = has_step2 and has_head3 and has_fort38
+    missing = []
+    if not has_step2:
+        missing.append("step2_out.pdb")
+    if not has_head3:
+        missing.append("head3.lst")
+    if not has_fort38:
+        missing.append("fort.38")
+    return {
+        "has_csv": has_csv,
+        "can_run": ready,
+        "missing": missing,
+    }
+
+
+def run_dipole(log_callback=None) -> dict:
+    """
+    Run the ms_dipole ensemble computation in the current directory.
+
+    Imports from mcce_dipole and produces dipole_ph_scan.csv.
+    Returns parsed dipole data on success.
+    """
+    import sys
+    import numpy as np
+
+    # Ensure MCCE_bin is importable
+    mcce_bin_dir = str(Path(__file__).resolve().parent.parent.parent / "MCCE_bin")
+    if mcce_bin_dir not in sys.path:
+        sys.path.insert(0, mcce_bin_dir)
+
+    from mcce_dipole.parsers import parse_step2_pdb, parse_head3lst, parse_fort38
+    from mcce_dipole.compute import compute_from_ensemble
+    from mcce_dipole.visualize import generate_ph_scan_csv
+
+    def log(msg):
+        if log_callback:
+            log_callback(msg)
+
+    # Check files
+    for name in ("step2_out.pdb", "head3.lst", "fort.38"):
+        if not os.path.isfile(name):
+            return {"error": f"Required file not found: {name}"}
+
+    log("Dipole: parsing step2_out.pdb...")
+    conformers, all_atoms = parse_step2_pdb("step2_out.pdb")
+    log(f"Dipole: {len(conformers)} conformers, {len(all_atoms)} atoms")
+
+    log("Dipole: parsing head3.lst...")
+    head3_data = parse_head3lst("head3.lst")
+    log(f"Dipole: {len(head3_data)} entries")
+
+    log("Dipole: parsing fort.38...")
+    ph_values, conf_ids, occupancies = parse_fort38("fort.38")
+    log(f"Dipole: {len(ph_values)} pH values, {len(conf_ids)} conformers")
+
+    log("Dipole: computing pH-dependent dipole moments...")
+    results = compute_from_ensemble(
+        conformers, head3_data,
+        ph_values, conf_ids, occupancies
+    )
+
+    csv_path = "dipole_ph_scan.csv"
+    generate_ph_scan_csv(results, csv_path)
+    log(f"Dipole: wrote {csv_path}")
+
+    return parse_dipole_csv(csv_path)
+
+
 def get_available_outputs() -> dict:
     """Check which MCCE4 output files exist in the current directory."""
     files = {
@@ -271,5 +438,7 @@ def get_available_outputs() -> dict:
         "energies": os.path.isdir("energies"),
         "run.prm": os.path.isfile("run.prm"),
         "run.log": os.path.isfile("run.log"),
+        "dipole_ph_scan.csv": os.path.isfile("dipole_ph_scan.csv"),
+        "fort.38": os.path.isfile("fort.38"),
     }
     return {"files": files, "workdir": os.getcwd()}

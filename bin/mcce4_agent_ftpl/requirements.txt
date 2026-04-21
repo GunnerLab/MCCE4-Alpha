@@ -1,0 +1,19 @@
+# MCCE4 Topology Agent — Dependencies
+# =====================================
+# Install: pip install -r requirements.txt
+
+# Core (required)
+rdkit                     # Chemistry toolkit — molecule parsing, 2D depiction, hybridization
+dimorphite-dl             # Protonation state enumeration at target pH
+
+# LLM Agent (recommended)
+google-genai              # Google Gemini API (free tier, no credit card)
+langgraph                 # LangGraph for agentic state machine orchestration
+
+# Web GUI (optional, for --gui mode)
+streamlit                 # Web framework for the interactive GUI
+streamlit-ketcher         # Ketcher molecule editor widget for Streamlit
+
+# Already in most scientific Python envs
+pandas                    # Data manipulation (used by Streamlit data editor)
+Pillow                    # Image handling for RDKit depictions

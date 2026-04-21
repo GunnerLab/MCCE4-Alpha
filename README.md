@@ -253,6 +253,15 @@ If your 'mc4' environment predates 01-08-2026, run these commands to update it:
 -->
 _This section will reflect important changes and will provide you with information on how to apply them; For example, if new python packages are added to the environment file (mc4.yml), then the entry pertaining to that change will list the command(s) to update your environment._ 
 
+* 2026-04-15:
+  - Feature Merge: MCCE4 Topology Agent
+  - __Apply changes: cd to your clone, then run `git pull`__
+  
+* 2026-04-09:
+  - Feature Merge: MCCE4 GUI
+  - Feature Merge: Protein Dipole Vectors and Visualization
+  - __Apply changes: cd to your clone, then run `git pull`__
+ 
 * 2026-02-20:
   - Feature Merge: Integrated Apptainer/Singularity containerization for the MCCE4-Alpha CLI tool.
   - Automated environment setup and image building via setup.sh to ensure cross-platform portability.

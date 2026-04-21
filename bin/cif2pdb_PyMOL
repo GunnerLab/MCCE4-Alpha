@@ -1,0 +1,164 @@
+#!/usr/bin/env python3
+
+"""
+Module: cif2pdb_PyMOL
+Created on Aug 19 19:20:00 2025
+@author: Gehan Ranepura and Raihan Uddin
+
+Convert CIF files to PDB format using PyMOL.
+
+Usage:
+    Convert with explicit output filename:
+        cif2pdb_PyMOL 4lzt.cif 4lzt.pdb
+
+    Convert and let the script choose output (input name with .pdb extension):
+        cif2pdb_PyMOL 4lzt.cif
+
+Optional flags:
+    --offline
+        Prevents PyMOL from fetching missing ligand definitions from the internet.
+        Use this if you see messages like:
+            "Downloading https://files.rcsb.org/ligands/download/UNK.cif -> ./UNK.cif"
+
+    --ligand-cache /path/to/dir
+        Sets a local cache directory for ligand CIF files. If PyMOL needs a ligand
+        definition (e.g., UNK) and it exists in this directory, it will use the local
+        copy instead of downloading it.
+
+Background:
+    When loading some CIF files, PyMOL may encounter non-standard residues/ligands
+    (e.g., "UNK"). To interpret them correctly, PyMOL sometimes fetches their
+    definitions from the RCSB ligand dictionary. That's why you might see:
+        Downloading https://files.rcsb.org/ligands/download/UNK.cif
+        -> ./UNK.cif
+    This is normal and does not affect the conversion; it just helps PyMOL parse the
+    structure more accurately. Use --offline or a --ligand-cache to control this.
+"""
+import argparse
+import os
+import sys
+import tempfile
+import shutil
+
+
+try:
+    from pymol import cmd, finish_launching
+except ImportError:
+    sys.exit("Please, visit https://pymol.org/conda/ to install PyMOL on your system.")
+
+
+def list_nonpolymer_ligands(obj_name="molecule"):
+    """Return sorted set of ligand 3-letter codes present (HETATM, excluding HOH).
+    """
+    resnames = set()
+    model = cmd.get_model(f"(hetatm and not resn HOH) and model {obj_name}")
+    for a in model.atom:
+        if a.resn:
+            resnames.add(a.resn.upper())
+    return sorted(resnames)
+
+
+def snapshot_cif_files(directory):
+    """Return a set of *.cif basenames currently in directory (uppercase sans extension).
+    """
+    out = set()
+    if directory and os.path.isdir(directory):
+        for fn in os.listdir(directory):
+            if fn.lower().endswith(".cif"):
+                code = os.path.splitext(fn)[0].upper()
+                out.add((code, os.path.abspath(os.path.join(directory, fn))))
+    return out
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Convert CIF to PDB using PyMOL",
+        epilog=(
+            "Examples:\n"
+            "  cif2pdb_PyMOL 4lzt.cif 4lzt.pdb\n"
+            "  cif2pdb_PyMOL 4lzt.cif\n"
+            "  cif2pdb_PyMOL 8esw.cif --offline\n"
+            "  cif2pdb_PyMOL 8esw.cif --ligand-cache ./ligands\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument("input", help="Input CIF file")
+    parser.add_argument("output", nargs="?", help="Output PDB file (optional)")
+    parser.add_argument("--offline", action="store_true",
+                        help="Disable network fetching of missing ligand CIFs")
+    parser.add_argument("--ligand-cache", metavar="DIR",
+                        help="Directory to use as local cache for ligand CIF files")
+
+    args = parser.parse_args()
+
+    input_file = args.input
+    if not input_file.lower().endswith(".cif"):
+        sys.exit("❌ Error: Input file must have a .cif extension")
+
+    # Default output name if not provided
+    output_file = args.output if args.output else os.path.splitext(input_file)[0] + ".pdb"
+
+    # Start PyMOL without GUI
+    finish_launching(['pymol', '-cq'])
+
+    # Decide fetch_path target (for detecting downloads)
+    created_temp_cache = False
+    fetch_dir = None
+    if args.ligand_cache:
+        os.makedirs(args.ligand_cache, exist_ok=True)
+        fetch_dir = os.path.abspath(args.ligand_cache)
+    elif not args.offline:
+        fetch_dir = tempfile.mkdtemp(prefix="pymol_ligand_cache_")
+        created_temp_cache = True
+
+    if fetch_dir:
+        cmd.set("fetch_path", fetch_dir)
+
+    if args.offline:
+        cmd.set("fetch_host", "")
+        if not fetch_dir:
+            cmd.set("fetch_path", "/dev/null")
+
+    before = snapshot_cif_files(fetch_dir) if fetch_dir else set()
+
+    # This is where PyMOL itself may print "Downloading ..." lines
+    cmd.load(input_file, "molecule")
+
+    ligands_present = list_nonpolymer_ligands("molecule")
+    if ligands_present:
+        print("\n🔎 Non-polymer ligands present in structure (excluding water):")
+        print("   " + ", ".join(ligands_present))
+    else:
+        print("\n🔎 No non-polymer ligands (excluding water) detected.")
+
+    after = snapshot_cif_files(fetch_dir) if fetch_dir else set()
+    new_files = {code: path for (code, path) in after - before}
+
+    if args.offline:
+        print("\n🌐 Offline mode: network fetching disabled.")
+        if new_files:
+            print("⚠️  Unexpected: ligand files appeared despite --offline:")
+            for code, path in sorted(new_files.items()):
+                print(f"   - {code} -> {path}")
+    else:
+        if new_files:
+            print("\n⬇️  Detected ligand definitions fetched during load:")
+            for code in sorted(new_files):
+                print(f"   - {code} -> {new_files[code]}")
+        else:
+            print("✅ No new ligand definitions were fetched during this conversion.")
+
+    cmd.save(output_file, "molecule")
+    print(f"\n✅ Converted {input_file} -> {output_file}")
+    cmd.quit()
+    if created_temp_cache and fetch_dir and os.path.isdir(fetch_dir):
+        try:
+            shutil.rmtree(fetch_dir)
+        except Exception:
+            pass
+
+    return
+
+
+if __name__ == "__main__":
+    main()

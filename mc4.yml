@@ -12,9 +12,9 @@ channels:
 dependencies:
   - python=3.10
   - pip
-  - mdanalysis
   - numpy
   - numba
+  - mdanalysis
   - parmed
   - vtk=9.3
   - setuptools>=64
@@ -31,3 +31,4 @@ dependencies:
     - uvicorn[standard]>=0.20.0
     - python-multipart>=0.0.5
     - websockets>=10.0
+    - dimorphite-dl

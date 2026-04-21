@@ -1,18 +1,33 @@
 #!/usr/bin/env python3
+
+"""
+CLI Module: pro_batch
+
+
+NOTES:
+1. The current implementation uses the cwd submit script as the master, which is
+   where the users would enter their modifications.
+   To make this clear, instead of being copied over, it is now linked into each
+   pdb folder (03-31-2026).
+
+"""
 import argparse
 import os
 from pathlib import fnmatch, Path
 import shutil
+import subprocess
 import sys
+import time
 from datetime import datetime
-from typing import List, Union, Tuple
+from typing import List, Tuple, Union
 
 # Attempt to import MCCE4 benchmark resources if available
 CLONE = Path(__file__).parent.parent
 if CLONE.name != "MCCE4-Alpha":
     try:
         from mcce4.mcce_benchmark import BenchResources, datasets_dict
-        inputpath_help = f"Path to a directory containing PDB files, or name of a pkdb dataset, one of: {list(datasets_dict.keys())}."
+        inputpath_help = ("Path to a directory containing PDB files, or name of a pkdb dataset, "
+                          f"one of: {list(datasets_dict.keys())}.")
     except ImportError:
         datasets_dict = None
         inputpath_help = "Path to a directory containing PDB files."
@@ -20,185 +35,486 @@ else:
     datasets_dict = None
     inputpath_help = "Path to a directory containing PDB files."
 
-# Constants
-BOOK = "book.txt"
-CUSTOM_PRM = "run.prm.custom"
+
 SUBMIT_SCRIPT = "submit_mcce4.sh"
 SUBMIT_SCRIPT_PATH = CLONE.joinpath("schedulers", SUBMIT_SCRIPT)
+DEFAULT_MAX_JOBS = 15
+DEFAULT_NICE = 10
+DEFAULT_SLURM_NICE = 1000
+CUSTOM_PRM = "run.prm.custom"
 BAD_ANSWER = "Answer must be one of [yes, no, y, n] (case insensitive). Please try again."
 
+BOOK = "book.txt"
+N_HEADER_LINES = 3
+DELIM_LINE = "-" * 38 + "\n"
+BOOK_FOOTER_LINES = [
+    DELIM_LINE,
+    "Legend:\n",
+    " r : Pending, Ready or Running\n",
+    " c : Completed (pK.out found)\n",
+    " e : Error (Check run.log in directory or bench_book.txt for Failed @ prerun)\n"
+]
+N_FOOTER_LINES = len(BOOK_FOOTER_LINES)
+
+
+class JobPool:
+    """Manages a pool of concurrent subprocess jobs with a concurrency limit (bash mode).
+    """
+
+    def __init__(self, max_jobs: int = DEFAULT_MAX_JOBS, nice: int = DEFAULT_NICE,
+                 poll_interval: float = 10.0):
+        self.max_jobs = max_jobs
+        self.nice = nice
+        self.poll_interval = poll_interval
+        self.running = {}   # {protein_name: subprocess.Popen}
+        self.failed = []    # protein names that exited non-zero
+        self.completed = [] # protein names that finished successfully
+
+    def _poll(self):
+        """Check running jobs, move finished ones to completed/failed."""
+        finished = []
+        for name, proc in self.running.items():
+            retcode = proc.poll()
+            if retcode is not None:
+                finished.append(name)
+                if retcode == 0:
+                    self.completed.append(name)
+                else:
+                    self.failed.append(name)
+                    print(f"  !! {name} exited with code {retcode} — check run.log")
+
+        for name in finished:
+            del self.running[name]
+
+    def wait_for_slot(self):
+        """Block until at least one job slot is available."""
+        while len(self.running) >= self.max_jobs:
+            self._poll()
+            if len(self.running) >= self.max_jobs:
+                time.sleep(self.poll_interval)
+
+    def wait_for_all(self):
+        """Block until every running job has finished."""
+        while self.running:
+            self._poll()
+            if self.running:
+                time.sleep(self.poll_interval)
+
+    def launch(self, protein_name: str, p_dir: Path, script_name: str):
+        """Launch a single protein run inside p_dir."""
+        self.wait_for_slot()
+
+        cmd = ["nice", "-n", str(self.nice), "bash", script_name]
+        log_fp = p_dir/"run.log"
+        log_fh = open(log_fp, "w")
+
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(p_dir),
+            stdout=log_fh,
+            stderr=subprocess.STDOUT,
+            preexec_fn=os.setpgrp,  # detach from terminal signals
+        )
+        proc._log_fh = log_fh
+        self.running[protein_name] = proc
+        print(f"  -> Started {protein_name} (PID {proc.pid}, "
+              f"nice {self.nice}, {len(self.running)}/{self.max_jobs} slots)")
+
+    def summary(self):
+        """Print a final summary of completed/failed jobs."""
+        total = len(self.completed) + len(self.failed)
+        print(f"\n{'=' * 45}")
+        print(f"Job Pool Summary: {total} jobs finished")
+        print(f"  Completed : {len(self.completed)}")
+        print(f"  Failed    : {len(self.failed)}")
+        if self.failed:
+            print(f"  Failed IDs: {', '.join(self.failed)}")
+        print(f"{'=' * 45}")
+
+
+class SlurmPool:
+    """Manages Slurm job submissions with a concurrency limit by polling squeue."""
+
+    def __init__(self, max_jobs: int = DEFAULT_MAX_JOBS, nice: int = DEFAULT_SLURM_NICE,
+                 job_name: str = "mcce_batch", poll_interval: float = 30.0):
+        self.max_jobs = max_jobs
+        self.nice = nice
+        self.job_name = job_name
+        self.poll_interval = poll_interval
+        self.submitted = []  # all protein names submitted
+
+    def _count_running(self) -> int:
+        """Count our active (running + pending) Slurm jobs by job name."""
+        try:
+            result = subprocess.run(
+                ["squeue", "--me", "--name", self.job_name,
+                 "--noheader", "--states", "R,PD"],
+                capture_output=True, text=True, timeout=15
+            )
+            return len(result.stdout.strip().splitlines()) if result.stdout.strip() else 0
+        except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+            print(f"  Warning: squeue check failed ({e}), assuming 0 running")
+            return 0
+
+    def wait_for_slot(self):
+        """Block until Slurm has fewer than max_jobs running/pending."""
+        while True:
+            running = self._count_running()
+            if running < self.max_jobs:
+                return
+            print(f"  ... {running}/{self.max_jobs} Slurm slots occupied, "
+                  f"waiting {self.poll_interval}s...")
+            time.sleep(self.poll_interval)
+
+    def wait_for_all(self):
+        """Block until all our Slurm jobs have finished."""
+        while True:
+            running = self._count_running()
+            if running == 0:
+                return
+            print(f"  ... {running} Slurm jobs still active, "
+                  f"waiting {self.poll_interval}s...")
+            time.sleep(self.poll_interval)
+
+    def launch(self, protein_name: str, p_dir: Path, script_name: str):
+        """Submit a single protein run via sbatch with nice priority and job name."""
+        self.wait_for_slot()
+
+        cmd = ["sbatch", f"--nice={self.nice}",
+               f"--job-name={self.job_name}", script_name]
+        result = subprocess.run(cmd, cwd=str(p_dir), capture_output=True, text=True)
+
+        if result.returncode == 0:
+            job_id = result.stdout.strip().split()[-1] if result.stdout.strip() else "?"
+            self.submitted.append(protein_name)
+            print(f"  -> Submitted {protein_name} (Slurm job {job_id}, "
+                  f"nice {self.nice}, {len(self.submitted)} total)")
+        else:
+            print(f"  !! sbatch failed for {protein_name}: {result.stderr.strip()}")
+
+    def summary(self):
+        """Print submission summary."""
+        print(f"\n{'=' * 45}")
+        print(f"Slurm Summary: {len(self.submitted)} jobs submitted")
+        print(f"  Nice priority : {self.nice}")
+        print(f"  Max concurrent: {self.max_jobs}")
+        print(f"  Job name      : {self.job_name}")
+        print(f"  Check status  : squeue --me --name {self.job_name}")
+        print(f"{'=' * 45}")
+
+
+# FIX get_protein_status:
+#  If submit script is running only steps 1 & 2, the updated book will show:
+#    <pdbid> r        In Step3
+#  even though the run is over (no running job on that pdbid).
+#  Instead, it would be preferable to show:
+#    <pdbid> c        Completed Step2
+#
 def get_protein_status(protein_name: str) -> Tuple[str, str]:
-    """Determines status based on file presence in the protein directory."""
+    """Determines status based on file presence in the protein directory.
+    """
+    if protein_name.startswith("#"):
+        return "e", "Failed @ prerun"
+
     p_dir = Path(protein_name.upper())
     if not p_dir.exists():
+        return "r", "Pending"
+
+    log_file = p_dir/"run.log"
+    if not log_file.exists():
         return "r", "Pending"
 
     steps = [
         ("step1_out.pdb", "Step1"),
         ("step2_out.pdb", "Step2"),
         ("head3.lst",     "Step3"),
-        ("pK.out",        "Step4")
+        ("pK.out",        "Step4"),
     ]
-    
+
     last_valid_step = "None"
     for filename, step_label in steps:
-        if (p_dir / filename).exists():
+        if (p_dir/filename).exists():
             last_valid_step = step_label
         else:
             break
-            
+
     if last_valid_step == "Step4":
         return "c", "Completed"
-    
-    log_file = p_dir / "run.log"
-    if log_file.exists():
-        if last_valid_step == "None":
-            return "e", "Failed @ Step1"
-        next_idx = int(last_valid_step[-1]) + 1
-        return "r", f"In Step{next_idx}"
 
-    return "r", "Pending"
+    if last_valid_step == "None":
+        return "e", "Failed @ Step1"
+
+    next_idx = int(last_valid_step[-1]) + 1
+    return "r", f"In Step{next_idx}"
+
+
+def book_header_lines() -> list:
+    return [f"Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n",
+            f"{'PDB':<12} {'Status':<8} {'Last_Step'}\n",
+            DELIM_LINE]
+
+
+def write_book(user_files: list, bench_book: bool=False):
+    """Write the bookkeping file with pdbs ids in from the user files
+    including a clean status table, timestamp, and legend.
+    If user_files is empty and bench_book is True, use pre-exisiting book.txt,
+    (presumably created by bench_setup).
+    """
+    content = book_header_lines()
+    if user_files:
+        content.extend([f"{fp.stem.upper():<12} {'r':<8} Pending\n"
+                        for fp in sorted(user_files)])
+    else:
+        # assume bench_setup was used
+        # (could also check for "meta_bench" dir to assert bench_setup was used)
+        bench_book_fp = sorted(Path.cwd().glob('*book.txt'))[0]
+        if not bench_book or not bench_book_fp.exists():
+            print("ERROR: With empty user_files, bench_book must be True (and book.txt exist).")
+            sys.exit(1)
+
+        # preserve bench book: it has info about failed step1 & tpl created
+        previous_book = f"bench_{BOOK}"
+        if bench_book_fp.name != previous_book:
+            shutil.copy2(bench_book_fp, Path(previous_book))
+
+        # keep commented out entries from book file, reformatted:
+        for line in bench_book_fp.read_text().splitlines():
+            if not line:
+                continue
+            parts = line.split(maxsplit=2)
+            if not line.startswith("#"):
+                content.append(f"{parts[0]:<12} {'r':<8} Pending\n")
+            else:
+                content.append(f"{parts[0]:<12} {'e':<8} {parts[2][2:]}\n")
+            
+    content.extend(BOOK_FOOTER_LINES)
+    with open(BOOK, "w") as f:
+        f.writelines(content)
+
+    return
+
 
 def update_book():
-    """Updates book.txt with a clean status table, timestamp, and legend."""
+    """Updates book.txt with a clean status table, timestamp, and legend.
+    """
     book_fp = Path(BOOK)
     if not book_fp.exists():
         return
 
-    lines = book_fp.read_text().splitlines()
     protein_ids = []
-    ignore_top = {"PDB", "LAST", "UPDATED:", "STATUS"}
-    
-    for line in lines:
+    for line in book_fp.read_text().splitlines()[N_HEADER_LINES:-N_FOOTER_LINES]:
         parts = line.split()
-        if not parts: continue
-        first_word = parts[0].upper().strip(":")
-        
-        if first_word == "LEGEND" or (line.startswith("-") and len(protein_ids) > 0):
-            break
-        if first_word in ignore_top or "LAST UPDATED" in line.upper() or line.startswith("-"):
+        if not parts:
             continue
-        if len(parts[0]) < 2 and first_word in {"C", "R", "E"}:
-            continue
-
         protein_ids.append(parts[0].upper())
 
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    content = [
-        f"Last Updated: {now}",
-        f"{'PDB':<12} {'Status':<8} {'Last_Step'}",
-        "-" * 38
-    ]
-    
-    for pid in sorted(set(protein_ids)):
+    content = book_header_lines()
+    for pid in protein_ids:
         flag, step = get_protein_status(pid)
-        content.append(f"{pid:<12} {flag:<8} {step}")
+        content.append(f"{pid:<12} {flag:<8} {step}\n")
+    content.extend(BOOK_FOOTER_LINES)
 
-    content.append("\n" + "-" * 38)
-    content.append("Legend:")
-    content.append(" r : Ready or Running")
-    content.append(" c : Completed (pK.out found)")
-    content.append(" e : Error (Check run.log in directory)")
-    
     with open(BOOK, "w") as f:
-        f.write("\n".join(content) + "\n")
+        f.writelines(content)
 
-def modify_script_for_runprm(script_path: str):
-    """Injects custom run.prm loading into the shell script steps."""
+    return
+
+
+def modify_script_for_runprm(script_path: Path):
+    """Injects custom run.prm loading into the shell script steps.
+    """
     if not Path(CUSTOM_PRM).exists():
         return
-    load_custom_str = f" -load_runprm {CUSTOM_PRM}"
-    lines = Path(script_path).read_text().splitlines()
-    new_lines = [line.strip() + load_custom_str + "\n" if fnmatch.fnmatch(line.split()[0] if line.split() else "", "step[1234].py") else line + "\n" for line in lines]
-    with open(script_path, "w") as f: f.writelines(new_lines)
+    load_custom_str = f" -load_runprm {CUSTOM_PRM}\n"
+    new_lines = [line.strip() + load_custom_str
+                 if fnmatch.fnmatch(line.split()[0] if line.split() else "", "step[1234].py") 
+                 else line + "\n" 
+                 for line in script_path.read_text().splitlines()]
+    with open(script_path, "w") as f:
+        f.writelines(new_lines)
 
-def process_protein_file(protein_path: str, script_path: str, use_scheduler: bool=False):
-    """Sets up the protein directory and launches the run."""
-    p_path = Path(protein_path)
-    p_dir = Path(p_path.stem.upper())
+    return
+
+
+def process_protein_file(protein_path: Path, script_path: Path, pool: SlurmPool):
+    """Sets up the protein directory and launches the run via the pool.
+    """
+    p_dir = Path(protein_path.stem.upper())
     p_dir.mkdir(exist_ok=True)
-    
-    shutil.copy2(p_path, p_dir)
-    pdb_fp = p_dir / p_path.name
-    prot_fp = p_dir / "prot.pdb"
-    if prot_fp.exists(): prot_fp.unlink()
-    prot_fp.symlink_to(pdb_fp.name)
-    
-    if Path(CUSTOM_PRM).exists():
-        target = p_dir / CUSTOM_PRM
-        if not target.exists(): target.symlink_to(Path(CUSTOM_PRM).absolute())
-        
-    shutil.copy2(script_path, p_dir / Path(script_path).name)
-    
-    if not use_scheduler:
-        cmd = f"bash {Path(script_path).name} > run.log 2>&1 &"
-        os.system(f"cd {p_dir} && {cmd}")
-    else:
-        # Runs via sbatch
-        cmd = f"sbatch {Path(script_path).name}"
-        os.system(f"cd {p_dir} && {cmd}")
+    pdb_fp = p_dir/protein_path.name
+    prot_fp = p_dir/"prot.pdb"
 
-def get_user_files(input_path: str) -> List[Path]:
-    return [fp for fp in Path(input_path).glob("*.pdb") if not (fnmatch.fnmatch(fp.name, "step[0123]_out.pdb") or fp.name == "prot.pdb")]
+    if not pdb_fp.exists():
+        shutil.copy2(protein_path, p_dir)
+    
+    if not prot_fp.exists():
+        prot_fp.symlink_to(pdb_fp.name)
+    else:
+        if not prot_fp.is_symlink():
+            prot_fp.unlink()
+            prot_fp.symlink_to(pdb_fp.name)
+
+    if Path(CUSTOM_PRM).exists():
+        target = p_dir/CUSTOM_PRM
+        if not target.exists():
+            target.symlink_to(Path(CUSTOM_PRM).absolute())
+
+    local_script = p_dir/script_path.name
+    # FEAT: link script using relative path; no hard paths carried over if folder copied:
+    if not local_script.exists():
+        relative_target = os.path.relpath(str(script_path), str(local_script.parent))
+        local_script.symlink_to(relative_target)
+    else:
+        if not local_script.is_symlink():
+            local_script.unlink()
+            relative_target = os.path.relpath(str(script_path), str(local_script.parent))
+            local_script.symlink_to(relative_target)
+
+    pool.launch(protein_path.stem.upper(), p_dir, script_path.name)
+
+    return
+
+
+def get_user_files(input_path: str) -> Tuple[List[Path], bool]:
+    """Return a 2-tuple:
+        (list of .pdb files that are neither mcce outputs nor prot.pdb, [False, True])
+    The second Boolean item indicates whether a pre-existing book.txt file was found.
+    """
+    # allow case where run folders were already setup via:
+    # `bench_setup user_pdbs . -pdbs_list <user_file> --no_runsdir` (--no_runsdir required!),
+    # which enables pdb download from supplied list. In this case, the book file
+    # contains commented out entries for pdbs with new tpl created: to keep.
+    # e.g.:
+    #  9HPP    i
+    #  #8V5W    e # prerun.step1: Generic tpl created...
+    #
+    # default behaviour for pro_batch: no prior setup:
+    input_fp = Path(input_path)
+    pdb_list = [fp for fp in input_fp.glob("*.pdb") 
+                    if not (fnmatch.fnmatch(fp.name, "step[0123]_out.pdb") 
+                            or fp.name == "prot.pdb")
+                ]
+
+    return pdb_list, Path("book.txt").exists()
+
 
 def ask_user(question: str) -> bool:
     while True:
         res = input(f"{question} (y/n): ").lower().strip()
-        if res in ['y', 'yes']: return True
-        if res in ['n', 'no']: return False
+        if res[0] == "y":
+            return True
+        if res[0] == "n":
+            return False
         print(BAD_ANSWER)
 
+
+def cli_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="pro_batch",
+                                     description="Batch launch MCCE runs.",
+                                     formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+                                     )
+    parser.add_argument("input_path",
+                        type=str,
+                        help=inputpath_help
+                        )
+    parser.add_argument("-custom",
+                        type=str,
+                        default="",
+                        help="Path to custom bash script."
+                        )
+    parser.add_argument("-j", "--jobs",
+                        type=int,
+                        default=DEFAULT_MAX_JOBS,
+                        help="Max concurrent jobs: how many MCCE runs execute simultaneously."
+                        )
+    parser.add_argument("--nice",
+                        type=int,
+                        default=None,
+                        help="Lower priority (higher values): nicer to other users. "
+                             "Slurm mode: range 0-10000. "
+                             "Bash mode (--no_slurm), higher priority: range 0-19."
+                        )
+    parser.add_argument("--no_slurm",
+                        action="store_true",
+                        default=False,
+                        help="Use bash instead of the Slurm scheduler to run jobs. NOTE: Jobs are "
+                             f"still low priority ({DEFAULT_NICE}) unless --nice is set with a lower value."
+                        )
+    parser.add_argument("--job_name",
+                        type=str,
+                        default="mcce_batch",
+                        help="Slurm job name for tracking with squeue --name to monitor your batch."
+                        )
+    parser.add_argument("--check",
+                        action="store_true",
+                        default=False,
+                        help="Update book.txt status and exit.")
+
+    return parser
+
+
 def protein_batch():
-    parser = argparse.ArgumentParser(prog="pro_batch", description="Batch launch MCCE runs.")
-    parser.add_argument("input_path", type=str, help=inputpath_help)
-    parser.add_argument("-custom", default="", help="Path to custom bash script.")
-    parser.add_argument("--sbatch", action="store_true", default=False, 
-                        help="Run all jobs separately using the Slurm scheduler (sbatch).")
-    parser.add_argument("--check", action="store_true", help="Update book.txt status and exit.")
+    parser = cli_parser()
     args = parser.parse_args()
-    
-    # Path resolution
+
+    # Data path resolution
     if datasets_dict and args.input_path in datasets_dict:
         input_path = str(BenchResources(args.input_path).BENCH_PDBS)
     else:
         input_path = args.input_path
         if not Path(input_path).is_dir():
-            print(f"Error: {input_path} is not a directory."); sys.exit(1)
+            print(f"Error: {input_path} is not a directory.")
+            sys.exit(1)
 
-    script_path = args.custom if args.custom else (Path(SUBMIT_SCRIPT) if Path(SUBMIT_SCRIPT).exists() else None)
+    script_path = None
+    submit_fp = Path(SUBMIT_SCRIPT)
+    if args.custom:
+        script_path = Path(args.custom)
+    else:
+        if submit_fp.exists():
+            script_path = submit_fp
+
     if not script_path and not args.check:
         if SUBMIT_SCRIPT_PATH.exists():
-            shutil.copy2(SUBMIT_SCRIPT_PATH, Path(SUBMIT_SCRIPT))
-            Path(SUBMIT_SCRIPT).chmod(0o755)
-            print(f"Created default {SUBMIT_SCRIPT}. Edit it then re-run."); sys.exit(0)
+            shutil.copy2(SUBMIT_SCRIPT_PATH, submit_fp)
+            submit_fp.chmod(0o755)
+            print(f"Created default {SUBMIT_SCRIPT}. Edit it then re-run.")
+            sys.exit(0)
         else:
-            print("Error: Submission script not found."); sys.exit(1)
+            print(f"Error: Submission script {SUBMIT_SCRIPT_PATH!s} not found.")
+            sys.exit(1)
 
-    user_files = get_user_files(input_path)
-    if not user_files:
-        print("No valid PDB files found."); sys.exit(1)
+    user_files, found_book = get_user_files(input_path)
+    if not user_files and not found_book:
+        print("ERROR: Cannot proceed: No valid PDB files found & no pre-existing book.")
+        sys.exit(1)
 
-    if not Path(BOOK).exists():
-        with open(BOOK, 'w') as f:
-            for fp in sorted(user_files): f.write(f"{fp.stem.upper():<12} r\n")
-    
+    write_book(user_files, found_book)
+
     update_book()
     if args.check:
-        print(f"Book status refreshed in {BOOK}."); return
+        print(f"Book status refreshed in {BOOK}.")
+        return
 
     # --- CATEGORIZED RE-RUN LOGIC ---
-    lines = Path(BOOK).read_text().splitlines()
     error_prots = []
     other_prots = []
-    new_prots = [] 
-    
-    for line in lines:
+    new_prots = []
+
+    for line in Path(BOOK).read_text().splitlines()[N_HEADER_LINES:-N_FOOTER_LINES]:
         parts = line.split()
-        if len(parts) >= 2 and len(parts[0]) >= 3 and not parts[0].startswith("-") and parts[0].upper() not in ["PDB", "LAST"]:
+        if (len(parts) >= 2 
+            and len(parts[0]) >= 3 
+            and not parts[0].startswith("-")):
             pdb_name = parts[0].upper()
             status = parts[1]
-            
-            if not Path(pdb_name).is_dir():
+            flag = ""  # case user manually added just a pdbid
+            try:
+                flag = parts[2]
+            except IndexError:
+                pass
+
+            if not flag or flag == "Pending":
                 new_prots.append(pdb_name)
             elif status == 'e':
                 error_prots.append(pdb_name)
@@ -208,7 +524,7 @@ def protein_batch():
     final_targets = []
 
     if new_prots:
-        print(f"\nFound {len(new_prots)} new or missing runs: {', '.join(new_prots)}")
+        print(f"\nFound {len(new_prots)} new or missing runs to launch: {', '.join(new_prots)}")
         final_targets.extend(new_prots)
 
     if error_prots:
@@ -217,22 +533,49 @@ def protein_batch():
             final_targets.extend(error_prots)
 
     if other_prots:
-        print(f"\nFound {len(other_prots)} existing runs (Completed 'c' or Running 'r').")
+        print(f"\nFound {len(other_prots)} existing runs (Completed 'c' or Pending/Ready/Running 'r').")
         if ask_user("Would you like to re-run/overwrite these as well?"):
             final_targets.extend(other_prots)
 
     if not final_targets:
-        print("\nNo proteins selected for processing. Exiting."); return
+        print("\nNo proteins selected for processing. Exiting.")
+        return
 
-    modify_script_for_runprm(str(script_path))
-    print(f"\nLaunching {len(final_targets)} runs...")
+    modify_script_for_runprm(script_path)
+
+    # --- LAUNCH JOB(s) ---
+    if shutil.which("sbatch") is None and not args.no_slurm:
+        if ask_user("Slurm is not installed, use bash for submitting instead?"):
+            args.no_slurm = True
+        else:
+            print("Exiting. To install on Linux, run: sudo apt install slurm")
+            sys.exit(0)
+
+    if args.no_slurm:  # JobPool
+        nice = args.nice if args.nice is not None else DEFAULT_NICE
+        pool = JobPool(max_jobs=args.jobs, nice=nice)
+        mode_str = f"bash (max {args.jobs} concurrent, nice {nice})"
+    else:
+        nice = args.nice if args.nice is not None else DEFAULT_SLURM_NICE
+        pool = SlurmPool(max_jobs=args.jobs, nice=nice, job_name=args.job_name)
+        mode_str = f"Slurm (max {args.jobs} concurrent, nice {nice})"
+
+    print(f"\nLaunching {len(final_targets)} runs via {mode_str}...")
     for fp in user_files:
         if fp.stem.upper() in final_targets:
-            print(f"  -> Starting {fp.stem}...")
-            process_protein_file(fp, str(script_path), args.sbatch)
-    
+            process_protein_file(fp, script_path, pool)
+
+    if args.no_slurm:
+        print("\nAll jobs submitted. Waiting for remaining jobs to finish...")
+        print(" Monitor book status in a new tab with:\n pro_batch",
+              f"{Path(args.input_path).resolve()!s} --check")
+        pool.wait_for_all()
+    else:
+        print(f"Monitor book status with:\n pro_batch {args.input_path} --check")
+        
     update_book()
-    print(f"\nDone. Monitor status in {BOOK}.")
+    pool.summary()
+
 
 if __name__ == "__main__":
     protein_batch()

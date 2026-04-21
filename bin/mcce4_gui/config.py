@@ -40,6 +40,7 @@ class Step1Config:
     """Step 1: Pre-run — PDB to MCCE PDB."""
     enabled: bool = True
     dry: bool = True
+    center_protein: bool = True
 
 
 @dataclass
