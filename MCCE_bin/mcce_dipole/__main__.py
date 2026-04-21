@@ -7,11 +7,12 @@ functionality when running the package directly.
 
 import argparse
 import os
+import subprocess
 import sys
 import numpy as np
 
-from .parsers import parse_step2_pdb, parse_head3lst, parse_fort38, parse_pqr
-from .compute import compute_from_pqr, compute_from_ensemble, dipole_magnitude
+from .parsers import parse_step2_pdb, parse_head3lst, parse_fort38, parse_pqr, parse_tpl_charges
+from .compute import compute_from_pqr, compute_from_ensemble, compute_from_step1, dipole_magnitude
 from .visualize import generate_pymol_script, generate_ph_scan_csv
 
 
@@ -52,10 +53,13 @@ Examples:
 
     parser.add_argument("--pqr", type=str, default=None,
                         help="PQR file for single microstate calculation")
+    parser.add_argument("--pdb", type=str, default=None, metavar="FILE",
+                        help="Input PDB for single-structure dipole using "
+                             "standard protonation charges from step1/topology")
     parser.add_argument("--dir", type=str, default=".",
                         help="MCCE4 run directory (default: cwd)")
-    parser.add_argument("--pdb", type=str, default=None,
-                        help="PDB for PyMOL display (default: step2_out.pdb)")
+    parser.add_argument("--pdb_display", type=str, default=None,
+                        help="PDB for PyMOL display (default: input file)")
     parser.add_argument("--ph", type=float, default=7.0,
                         help="pH for PyMOL snapshot (default: 7.0)")
     parser.add_argument("--arrow_scale", type=float, default=0.1,
@@ -73,8 +77,48 @@ Examples:
         print(f"  Atoms: {len(pqr_atoms)}")
         results = compute_from_pqr(pqr_atoms)
 
-        pdb_file = args.pdb or args.pqr
+        pdb_file = args.pdb_display or args.pqr
         pml_path = f"{args.output_prefix}_pymol.pml"
+        generate_pymol_script(pdb_file, results, pml_path,
+                              ph_index=None, arrow_scale=args.arrow_scale)
+        print(f"  PyMOL script: {pml_path}\n")
+        return
+
+    if args.pdb:
+        pdb_input = args.pdb
+        if not os.path.exists(pdb_input):
+            sys.exit(f"Error: PDB file not found: {pdb_input}")
+
+        mcce_dir = args.dir
+        step1_path = os.path.join(mcce_dir, "step1_out.pdb")
+        param_path = os.path.join(mcce_dir, "param")
+
+        if not os.path.exists(step1_path):
+            print(f"\n  step1_out.pdb not found, running step1.py on {pdb_input}...")
+            result = subprocess.run(
+                ["step1.py", pdb_input],
+                cwd=os.path.abspath(mcce_dir),
+                capture_output=True, text=True
+            )
+            if result.returncode != 0 or not os.path.exists(step1_path):
+                print(f"\n  Error: step1.py failed.")
+                if result.stdout:
+                    print(f"  stdout: {result.stdout.strip()}")
+                if result.stderr:
+                    print(f"  stderr: {result.stderr.strip()}")
+                print(f"\n  Please fix these issues and run again.")
+                sys.exit(1)
+
+        if not os.path.exists(param_path):
+            sys.exit(f"Error: param/ directory not found in {os.path.abspath(mcce_dir)}.")
+
+        conformers, all_atoms = parse_step2_pdb(step1_path)
+        tpl_charges = parse_tpl_charges(param_path)
+        results = compute_from_step1(conformers, all_atoms, tpl_charges)
+
+        pdb_file = args.pdb_display or pdb_input
+        prefix = f"{args.output_prefix}_pdb"
+        pml_path = f"{prefix}_pymol.pml"
         generate_pymol_script(pdb_file, results, pml_path,
                               ph_index=None, arrow_scale=args.arrow_scale)
         print(f"  PyMOL script: {pml_path}\n")
@@ -108,7 +152,7 @@ Examples:
 
     ph_idx = np.argmin(np.abs(ph_values - args.ph))
     actual_ph = ph_values[ph_idx]
-    pdb_file = args.pdb or step2_path
+    pdb_file = args.pdb_display or step2_path
     pml_path = f"{args.output_prefix}_pH{actual_ph:.0f}_pymol.pml"
     generate_pymol_script(pdb_file, results, pml_path,
                           ph_index=ph_idx, arrow_scale=args.arrow_scale)

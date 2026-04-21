@@ -245,6 +245,51 @@ def compute_from_ensemble(conformers, head3_data,
     return results
 
 
+def compute_from_step1(conformers, all_atoms, tpl_charges):
+    """
+    Compute dipole from step1_out.pdb using topology charges.
+
+    step1_out.pdb has 0.000 in the charge field — actual charges come from
+    param/mcce.tpl. Each atom is matched by (conf_key, atom_name) where
+    conf_key = RES(3) + CONFTYPE(2), e.g. "ARGBK", "ARG01".
+
+    All conformers are treated with occupancy=1 (standard protonation state
+    uses the first non-BK conformer "01" for each residue).
+
+    Parameters:
+        conformers: dict {conf_id: [Atom, ...]} from parse_step2_pdb()
+        all_atoms:  flat list of Atom objects
+        tpl_charges: dict {(conf_key, atom_name): charge} from parse_tpl_charges()
+
+    Returns:
+        dict with dipole results (same format as compute_from_pqr)
+    """
+    # Assign charges from topology to each atom
+    pqr_atoms = []
+    unmatched = 0
+    for atom in all_atoms:
+        conf_key = atom.conf_key  # e.g. "ARGBK", "ARG01"
+        charge = tpl_charges.get((conf_key, atom.name), 0.0)
+        if (conf_key, atom.name) not in tpl_charges:
+            unmatched += 1
+        pqr_atoms.append({
+            "name": atom.name,
+            "res_name": atom.res_name,
+            "chain": atom.chain,
+            "res_seq": atom.res_seq,
+            "coords": atom.coords,
+            "charge": charge,
+            "radius": atom.radius,
+        })
+
+    if unmatched > 0:
+        import sys
+        print(f"  Note: {unmatched}/{len(all_atoms)} atoms not in topology charge table "
+              f"(non-polar atoms, charge=0.0)", file=sys.stderr)
+
+    return compute_from_pqr(pqr_atoms)
+
+
 def dipole_magnitude(mu_vector):
     """Magnitude of a dipole vector (or array of vectors)."""
     if mu_vector.ndim == 1:
