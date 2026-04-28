@@ -245,6 +245,84 @@ def compute_from_ensemble(conformers, head3_data,
     return results
 
 
+# ---------------------------------------------------------------------------
+# PDB standard-protonation (single state from step1_out.pdb + topology)
+# ---------------------------------------------------------------------------
+STANDARD_PROTONATION = {
+    "ARG": "+1",   # pKa ~12.5, protonated
+    "LYS": "+1",   # pKa ~10.5, protonated
+    "HIS": "01",   # pKa ~6.0, neutral
+    "ASP": "-1",   # pKa ~3.9, deprotonated
+    "GLU": "-1",   # pKa ~4.1, deprotonated
+    "NTR": "+1",   # pKa ~8.0, protonated
+    "CTR": "-1",   # pKa ~3.2, deprotonated
+    "TYR": "01",   # pKa ~10.1, neutral
+    "CYS": "01",   # pKa ~8.3, neutral
+}
+
+
+def compute_from_step1(conformers, all_atoms, tpl_charges):
+    """
+    Compute dipole/quadrupole from step1_out.pdb using standard protonation
+    charges from the topology (param/mcce.tpl).
+
+    For ionizable sidechain atoms, charges are looked up under the standard
+    protonation conf_key (e.g. ARG+1) first, falling back to the original
+    conf_key (e.g. ARG01) for atoms that exist in both forms.
+
+    Note: step1_out.pdb only contains atoms from the 01 conformer geometry.
+    Protons that exist only in +1/-1 forms (e.g. HE on ARG+1) are absent,
+    so the net charge will be systematically underestimated for ionizable
+    residues whose standard state differs from 01.
+
+    Parameters:
+        conformers: dict from parsers.parse_step2_pdb() (works on step1_out.pdb)
+        all_atoms:  list of Atom objects from parse_step2_pdb()
+        tpl_charges: dict {(conf_key, atom_name): charge} from parse_tpl_charges()
+
+    Returns:
+        dict — same format as compute_from_pqr()
+    """
+    pqr_atoms = []
+    unmatched = 0
+
+    for atom in all_atoms:
+        if atom.res_name in STANDARD_PROTONATION and atom.conf_type != "BK":
+            std_type = STANDARD_PROTONATION[atom.res_name]
+            std_key = atom.res_name + std_type
+            orig_key = atom.conf_key
+
+            if (std_key, atom.name) in tpl_charges:
+                charge = tpl_charges[(std_key, atom.name)]
+            elif (orig_key, atom.name) in tpl_charges:
+                charge = tpl_charges[(orig_key, atom.name)]
+            else:
+                charge = 0.0
+                unmatched += 1
+        else:
+            conf_key = atom.conf_key
+            charge = tpl_charges.get((conf_key, atom.name), 0.0)
+            if (conf_key, atom.name) not in tpl_charges:
+                unmatched += 1
+
+        pqr_atoms.append({
+            "name": atom.name,
+            "res_name": atom.res_name,
+            "chain": atom.chain,
+            "res_seq": atom.res_seq,
+            "coords": atom.coords,
+            "charge": charge,
+            "radius": atom.radius,
+        })
+
+    if unmatched > 0:
+        import sys
+        print(f"  Note: {unmatched}/{len(all_atoms)} atoms not in topology charge table "
+              f"(non-polar atoms, charge=0.0)", file=sys.stderr)
+
+    return compute_from_pqr(pqr_atoms)
+
+
 def dipole_magnitude(mu_vector):
     """Magnitude of a dipole vector (or array of vectors)."""
     if mu_vector.ndim == 1:

@@ -427,6 +427,93 @@ def run_dipole(log_callback=None) -> dict:
     return parse_dipole_csv(csv_path)
 
 
+def can_run_pdb_dipole() -> dict:
+    """Check whether PDB standard protonation dipole can be computed."""
+    has_step1 = os.path.isfile("step1_out.pdb")
+    has_param = os.path.isdir("param") and os.path.isfile(os.path.join("param", "mcce.tpl"))
+    missing = []
+    if not has_step1:
+        missing.append("step1_out.pdb")
+    if not has_param:
+        missing.append("param/mcce.tpl")
+    return {
+        "can_run": has_step1 and has_param,
+        "missing": missing,
+    }
+
+
+def run_pdb_dipole(log_callback=None) -> dict:
+    """
+    Compute PDB standard protonation dipole from step1_out.pdb + param/mcce.tpl.
+
+    Returns a dict with single-state dipole data formatted for the GUI,
+    including arrow endpoints and quadrupole data.
+    """
+    import sys
+    import numpy as np
+
+    mcce_bin_dir = str(Path(__file__).resolve().parent.parent.parent / "MCCE_bin")
+    if mcce_bin_dir not in sys.path:
+        sys.path.insert(0, mcce_bin_dir)
+
+    from mcce_dipole.parsers import parse_step2_pdb, parse_tpl_charges
+    from mcce_dipole.compute import compute_from_step1
+
+    def log(msg):
+        if log_callback:
+            log_callback(msg)
+
+    if not os.path.isfile("step1_out.pdb"):
+        return {"error": "step1_out.pdb not found"}
+    param_dir = "param"
+    if not os.path.isfile(os.path.join(param_dir, "mcce.tpl")):
+        return {"error": "param/mcce.tpl not found"}
+
+    log("PDB dipole: parsing step1_out.pdb...")
+    conformers, all_atoms = parse_step2_pdb("step1_out.pdb")
+    log(f"PDB dipole: {len(conformers)} conformers, {len(all_atoms)} atoms")
+
+    log("PDB dipole: loading topology charges...")
+    tpl_charges = parse_tpl_charges(param_dir)
+    log(f"PDB dipole: {len(tpl_charges)} charge entries")
+
+    log("PDB dipole: computing standard protonation dipole...")
+    results = compute_from_step1(conformers, all_atoms, tpl_charges)
+
+    center = results["center"].tolist()
+    arrow_scale = 0.1
+
+    data = {
+        "mode": "pdb",
+        "center": center,
+        "net_charge": float(results["net_charge"]),
+        "arrows": {},
+        "vectors": {},
+        "quadrupole_eigenvalues": results["quadrupole_eigenvalues"].tolist(),
+        "quadrupole_eigenvectors": results["quadrupole_eigenvectors"].T.tolist(),
+    }
+
+    for key, label in [("backbone_dipole", "backbone"),
+                       ("ionizable_dipole", "ionizable"),
+                       ("full_dipole", "full")]:
+        mu = results[key]
+        mag = float(np.linalg.norm(mu))
+        data[f"{label}_D"] = mag
+
+        if mag > 0.1:
+            direction = mu / mag
+            neg = [center[i] - direction[i] * mag * arrow_scale for i in range(3)]
+            pos = [center[i] + direction[i] * mag * arrow_scale for i in range(3)]
+        else:
+            neg = center[:]
+            pos = center[:]
+        data["arrows"][label] = {"neg": neg, "pos": pos}
+        data["vectors"][label] = mu.tolist()
+
+    log("PDB dipole: done.")
+    return data
+
+
 def get_available_outputs() -> dict:
     """Check which MCCE4 output files exist in the current directory."""
     files = {

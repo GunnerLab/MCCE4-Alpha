@@ -31,6 +31,7 @@ Units: Dipole in Debye (1 e*A = 4.803 D), Quadrupole in e*A^2.
 
 Usage:
   ms_dipole.py                        # ensemble from cwd
+  ms_dipole.py --pdb protein.pdb      # PDB standard protonation
   ms_dipole.py --pqr state_0001.pqr   # single microstate PQR
   ms_dipole.py --dir /path/to/run     # ensemble from another dir
   ms_dipole.py --ph 4.0               # PyMOL snapshot at pH 4
@@ -38,6 +39,7 @@ Usage:
 
 import argparse
 import os
+import subprocess
 import sys
 import numpy as np
 
@@ -47,9 +49,9 @@ if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
 from mcce_dipole.parsers import (parse_step2_pdb, parse_head3lst, parse_fort38,
-                                 parse_pqr)
+                                 parse_pqr, parse_tpl_charges)
 from mcce_dipole.compute import (compute_from_pqr, compute_from_ensemble,
-                                 dipole_magnitude)
+                                 compute_from_step1, dipole_magnitude)
 from mcce_dipole.visualize import generate_pymol_script, generate_ph_scan_csv
 
 
@@ -192,12 +194,15 @@ PyMOL controls (type 'dipole_help' after loading the .pml script):
         """,
     )
 
+    parser.add_argument("--pdb", type=str, default=None,
+                        help="Input PDB file for standard protonation dipole. "
+                             "Uses step1_out.pdb + param/mcce.tpl charges.")
     parser.add_argument("--pqr", type=str, default=None,
                         help="PQR file for single microstate calculation. "
                              "If omitted, runs ensemble mode.")
     parser.add_argument("--dir", type=str, default=".",
                         help="MCCE4 run directory (default: current directory)")
-    parser.add_argument("--pdb", type=str, default=None,
+    parser.add_argument("--pdb_display", type=str, default=None,
                         help="PDB/PQR for PyMOL protein display "
                              "(default: step2_out.pdb or the PQR file)")
     parser.add_argument("--ph", type=float, default=7.0,
@@ -224,8 +229,75 @@ PyMOL controls (type 'dipole_help' after loading the .pml script):
         print_single_state(results, label=f"Microstate: {os.path.basename(args.pqr)}")
 
         # Generate PyMOL script
-        pdb_file = args.pdb or args.pqr
+        pdb_file = args.pdb_display or args.pqr
         pml_path = f"{args.output_prefix}_pymol.pml"
+        generate_pymol_script(pdb_file, results, pml_path,
+                              ph_index=None, arrow_scale=args.arrow_scale)
+
+        pse_path = pml_path.replace(".pml", ".pse")
+        print(f"  Output:")
+        print(f"    PyMOL script  {pml_path}")
+        print(f"    PyMOL session {pse_path}  (open directly in PyMOL)")
+        print(f"\n  -> pymol {pml_path}")
+        print(f"  -> Type 'dipole_help' in PyMOL for toggle commands\n")
+        return
+
+    # ===================================================================
+    # PDB MODE — standard protonation from step1_out.pdb + topology
+    # ===================================================================
+    if args.pdb:
+        if not os.path.exists(args.pdb):
+            sys.exit(f"Error: PDB file not found: {args.pdb}")
+
+        mcce_dir = args.dir
+
+        # Check for step1_out.pdb; run step1.py if missing
+        step1_path = os.path.join(mcce_dir, "step1_out.pdb")
+        if not os.path.exists(step1_path):
+            print(f"\n  step1_out.pdb not found — running step1.py...")
+            step1_script = os.path.join(os.path.dirname(SCRIPT_DIR), "bin", "step1.py")
+            if not os.path.exists(step1_script):
+                step1_script = "step1.py"
+            try:
+                result = subprocess.run(
+                    [sys.executable, step1_script, args.pdb],
+                    cwd=mcce_dir, capture_output=True, text=True, timeout=300
+                )
+                if result.returncode != 0:
+                    print(f"\n  step1.py failed (exit code {result.returncode}):")
+                    if result.stderr:
+                        print(result.stderr[:500])
+                    sys.exit("  Fix these issues and run ms_dipole.py --pdb again.")
+            except FileNotFoundError:
+                sys.exit("  Error: step1.py not found. Run step1 manually first.")
+
+        if not os.path.exists(step1_path):
+            sys.exit(f"  Error: step1_out.pdb still not found after running step1.py")
+
+        # Load topology charges
+        param_dir = os.path.join(mcce_dir, "param")
+        tpl_path = os.path.join(param_dir, "mcce.tpl")
+        if not os.path.exists(tpl_path):
+            sys.exit(f"  Error: {tpl_path} not found. Run step1.py first to generate topology.")
+
+        print_header("PDB Standard Protonation Dipole Analysis")
+        print(f"  Input PDB: {args.pdb}")
+
+        print(f"\n  Loading topology charges from {tpl_path}...")
+        tpl_charges = parse_tpl_charges(param_dir)
+        print(f"  Topology entries: {len(tpl_charges)}")
+
+        print(f"  Parsing step1_out.pdb...", end=" ", flush=True)
+        conformers, all_atoms = parse_step2_pdb(step1_path)
+        print(f"{len(conformers)} conformers, {len(all_atoms)} atoms")
+
+        print(f"  Computing dipole with standard protonation charges...")
+        results = compute_from_step1(conformers, all_atoms, tpl_charges)
+        print_single_state(results, label="Standard Protonation State")
+
+        # Generate outputs with _pdb suffix
+        pdb_file = args.pdb_display or args.pdb
+        pml_path = f"{args.output_prefix}_pdb_pymol.pml"
         generate_pymol_script(pdb_file, results, pml_path,
                               ph_index=None, arrow_scale=args.arrow_scale)
 
@@ -298,7 +370,7 @@ PyMOL controls (type 'dipole_help' after loading the .pml script):
 
     ph_idx = np.argmin(np.abs(ph_values - args.ph))
     actual_ph = ph_values[ph_idx]
-    pdb_file = args.pdb or find_file(mcce_dir, "prot_center.pdb", "prot.pdb")
+    pdb_file = args.pdb_display or find_file(mcce_dir, "prot_center.pdb", "prot.pdb")
     if not pdb_file:
         print(f"\n  Error: No protein PDB found for visualization.")
         print(f"  Looked for prot_center.pdb and prot.pdb in {os.path.abspath(mcce_dir)}")
