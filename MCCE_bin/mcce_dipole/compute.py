@@ -245,16 +245,34 @@ def compute_from_ensemble(conformers, head3_data,
     return results
 
 
+# Standard protonation states at pH 7 for ionizable residues.
+# Maps residue name -> conf_type to use for charge lookup.
+STANDARD_PROTONATION = {
+    "ARG": "+1",   # pKa ~12.5, protonated
+    "LYS": "+1",   # pKa ~10.5, protonated
+    "HIS": "01",   # pKa ~6.0, neutral
+    "ASP": "-1",   # pKa ~3.9, deprotonated
+    "GLU": "-1",   # pKa ~4.1, deprotonated
+    "NTR": "+1",   # pKa ~8.0, protonated
+    "CTR": "-1",   # pKa ~3.2, deprotonated
+    "TYR": "01",   # pKa ~10.1, neutral
+    "CYS": "01",   # pKa ~8.3, neutral
+}
+
+
 def compute_from_step1(conformers, all_atoms, tpl_charges):
     """
-    Compute dipole from step1_out.pdb using topology charges.
+    Compute dipole from step1_out.pdb using topology charges at standard
+    protonation (pH 7).
 
     step1_out.pdb has 0.000 in the charge field — actual charges come from
     param/mcce.tpl. Each atom is matched by (conf_key, atom_name) where
-    conf_key = RES(3) + CONFTYPE(2), e.g. "ARGBK", "ARG01".
+    conf_key = RES(3) + CONFTYPE(2), e.g. "ARGBK", "ARG+1".
 
-    All conformers are treated with occupancy=1 (standard protonation state
-    uses the first non-BK conformer "01" for each residue).
+    For ionizable residues, the standard protonation state at pH 7 is used:
+      ARG/LYS/NTR -> "+1" (protonated)
+      ASP/GLU/CTR -> "-1" (deprotonated)
+      HIS/TYR/CYS -> "01" (neutral)
 
     Parameters:
         conformers: dict {conf_id: [Atom, ...]} from parse_step2_pdb()
@@ -264,14 +282,28 @@ def compute_from_step1(conformers, all_atoms, tpl_charges):
     Returns:
         dict with dipole results (same format as compute_from_pqr)
     """
-    # Assign charges from topology to each atom
     pqr_atoms = []
     unmatched = 0
     for atom in all_atoms:
-        conf_key = atom.conf_key  # e.g. "ARGBK", "ARG01"
-        charge = tpl_charges.get((conf_key, atom.name), 0.0)
-        if (conf_key, atom.name) not in tpl_charges:
-            unmatched += 1
+        # For ionizable sidechain conformers, remap to standard protonation
+        if atom.res_name in STANDARD_PROTONATION and atom.conf_type != "BK":
+            std_type = STANDARD_PROTONATION[atom.res_name]
+            std_key = atom.res_name + std_type
+            orig_key = atom.conf_key
+            # Use standard protonation charge if available, else fall back to 01
+            if (std_key, atom.name) in tpl_charges:
+                charge = tpl_charges[(std_key, atom.name)]
+            elif (orig_key, atom.name) in tpl_charges:
+                charge = tpl_charges[(orig_key, atom.name)]
+            else:
+                charge = 0.0
+                unmatched += 1
+        else:
+            conf_key = atom.conf_key
+            charge = tpl_charges.get((conf_key, atom.name), 0.0)
+            if (conf_key, atom.name) not in tpl_charges:
+                unmatched += 1
+
         pqr_atoms.append({
             "name": atom.name,
             "res_name": atom.res_name,
