@@ -5,7 +5,9 @@
 #SBATCH --output=submit_mcce4.log
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
+#SBATCH --cpus-per-task=20
 #SBATCH --mem=12G                 # Adjust memory if needed
+#SBATCH --time=24:00:00
 #SBATCH --export=ALL
 
 #=============================================================================
@@ -27,7 +29,7 @@ USER_PARAM="./user_param"          # PATH to "user_param" directory containing a
 EXTRA="./user_param/extra.tpl"     # PATH to an different "extra.tpl" file (local file). (default: MCCE_HOME/extra.tpl)
 TMP="/tmp"                         # PATH to temporary directory for storing PBE calculation files during step3
 CPUS=1                             # Number of CPU cores to use for parallelizable MCCE calculations
-EPS=8                              # Protein dielectric constant
+EPS=4                              # Protein dielectric constant
 
 # Step control flags
 step1="t"               # STEP1: pre-run, pdb-> mcce pdb  (DO_PREMCCE)
