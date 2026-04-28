@@ -478,7 +478,11 @@ select{appearance:none;background-image:url("data:image/svg+xml,%3Csvg width='10
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
         <div class="cfg-card">
           <div class="cfg-card-t">Dipole &amp; Quadrupole vectors — 3D view</div>
-          <div class="dipole-controls">
+          <div class="dipole-controls" id="dipole-mode-toggle" style="display:none">
+            <label class="dipole-toggle"><input type="radio" name="dipole-mode" value="ensemble" checked onchange="setDipoleViewMode('ensemble')"> Ensemble (pH-dependent)</label>
+            <label class="dipole-toggle"><input type="radio" name="dipole-mode" value="pdb" onchange="setDipoleViewMode('pdb')"> PDB (standard protonation)</label>
+          </div>
+          <div class="dipole-controls" id="dipole-ph-row">
             <div class="dipole-ph-ctrl">
               <span>pH:</span>
               <input type="range" id="dipole-ph-slider" min="0" max="14" step="1" value="7">
@@ -926,6 +930,9 @@ function updateTitrationPlot(){
 let dipoleViewer=null;
 let dipoleData=null;
 let dipoleShapes=[];
+let pdbDipoleData=null;
+let dipoleViewMode='ensemble';
+let pdbDipoleAvailable=false;
 
 function initDipoleViewer(){
   if(typeof $3Dmol==='undefined')return;
@@ -940,10 +947,24 @@ async function loadDipoleData(){
     /* Check dipole status: CSV exists, or can we run ms_dipole? */
     const status=await api('/api/analysis/dipole/status');
 
+    /* Track PDB dipole availability for the toggle */
+    pdbDipoleAvailable=!!status.pdb_available;
+
     if(status.has_csv){
       /* CSV already exists — load it directly */
       const data=await api('/api/analysis/dipole');
-      if(data&&!data.error) displayDipoleData(data);
+      if(data&&!data.error){
+        /* Pre-fetch PDB dipole data if available */
+        if(pdbDipoleAvailable&&!pdbDipoleData){
+          try{
+            const pdb=await fetch('/api/analysis/dipole/pdb_run',{method:'POST'}).then(r=>{
+              if(!r.ok)throw new Error(r.statusText);return r.json();
+            });
+            if(pdb&&!pdb.error) pdbDipoleData=pdb;
+          }catch(e2){/* PDB dipole optional */}
+        }
+        displayDipoleData(data);
+      }
     }else if(status.can_run){
       /* Required files present but no CSV yet — show run button */
       $('dipole-section').style.display='block';
@@ -966,6 +987,11 @@ async function runDipoleAnalysis(){
     });
     if(data&&!data.error){
       $('dipole-run-prompt').style.display='none';
+      /* Backend includes pdb_data when step1_out.pdb + param/ are available */
+      if(data.pdb_data){
+        pdbDipoleData=data.pdb_data;
+        pdbDipoleAvailable=true;
+      }
       displayDipoleData(data);
     }else{
       $('dipole-run-status').textContent='Error: '+(data.error||'Unknown error');
@@ -998,17 +1024,22 @@ function displayDipoleData(data){
   slider.value=bestIdx;
   $('dipole-ph-label').textContent=data.ph_values[bestIdx].toFixed(1);
 
+  /* Show ensemble/PDB toggle if PDB dipole is available */
+  if(pdbDipoleAvailable){
+    $('dipole-mode-toggle').style.display='flex';
+  }
+
   if(!dipoleListenersAttached){
     dipoleListenersAttached=true;
     slider.addEventListener('input',()=>{
       const idx=parseInt(slider.value);
       $('dipole-ph-label').textContent=data.ph_values[idx].toFixed(1);
-      renderDipoleArrows(idx);
+      rerender();
     });
-    $('dip-bb').addEventListener('change',()=>renderDipoleArrows(parseInt($('dipole-ph-slider').value)));
-    $('dip-ion').addEventListener('change',()=>renderDipoleArrows(parseInt($('dipole-ph-slider').value)));
-    $('dip-full').addEventListener('change',()=>renderDipoleArrows(parseInt($('dipole-ph-slider').value)));
-    $('dip-quad').addEventListener('change',()=>renderDipoleArrows(parseInt($('dipole-ph-slider').value)));
+    $('dip-bb').addEventListener('change',()=>rerender());
+    $('dip-ion').addEventListener('change',()=>rerender());
+    $('dip-full').addEventListener('change',()=>rerender());
+    $('dip-quad').addEventListener('change',()=>rerender());
   }
 
   /* Load structure into dipole viewer */
@@ -1026,7 +1057,7 @@ function displayDipoleData(data){
   }
   (async()=>{
     try{
-      const pdb=await api('/api/pdb/step2_content');
+      const pdb=await api('/api/pdb/protein_content');
       if(pdb&&pdb.content){
         dipoleViewer.removeAllModels();
         dipoleViewer.addModel(pdb.content,'pdb');
@@ -1034,7 +1065,7 @@ function displayDipoleData(data){
       }
     }catch(e){
       try{
-        const pdb=await api('/api/pdb/content');
+        const pdb=await api('/api/pdb/step2_content');
         if(pdb&&pdb.content){
           dipoleViewer.removeAllModels();
           dipoleViewer.addModel(pdb.content,'pdb');
@@ -1042,7 +1073,7 @@ function displayDipoleData(data){
         }
       }catch(e2){}
     }
-    renderDipoleArrows(bestIdx);
+    rerender();
   })();
 
   plotDipoleMagnitudes(data);
@@ -1319,6 +1350,210 @@ function plotQuadrupole(data){
     {x:data.ph_values,y:e3,name:'Q\u2083',type:'scatter',mode:'lines+markers',
      line:{width:2.5,color:'#3399ff'},marker:{size:4}},
   ],layout,{responsive:true,displaylogo:false,modeBarButtonsToRemove:['lasso2d','select2d']});
+}
+
+/* ═══════════════ DIPOLE MODE TOGGLE ═══════════════ */
+
+function rerender(){
+  if(dipoleViewMode==='pdb'){
+    renderPdbDipoleArrows();
+  }else{
+    renderDipoleArrows(parseInt($('dipole-ph-slider').value));
+  }
+}
+
+async function setDipoleViewMode(mode){
+  dipoleViewMode=mode;
+  if(mode==='pdb'){
+    $('dipole-ph-row').style.display='none';
+    if(!pdbDipoleData){
+      $('dipole-mag-info').textContent='Loading PDB dipole...';
+      try{
+        const data=await fetch('/api/analysis/dipole/pdb_run',{method:'POST'}).then(r=>{
+          if(!r.ok)throw new Error(r.statusText);return r.json();
+        });
+        if(data&&!data.error){
+          pdbDipoleData=data;
+        }else{
+          $('dipole-mag-info').textContent='Error: '+(data.error||'Unknown');
+          return;
+        }
+      }catch(e){
+        $('dipole-mag-info').textContent='Error: '+e.message;
+        return;
+      }
+    }
+    renderPdbDipoleArrows();
+  }else{
+    $('dipole-ph-row').style.display='flex';
+    renderDipoleArrows(parseInt($('dipole-ph-slider').value));
+  }
+}
+
+function renderPdbDipoleArrows(){
+  if(!dipoleViewer||!pdbDipoleData)return;
+
+  dipoleShapes.forEach(s=>dipoleViewer.removeShape(s));
+  dipoleShapes=[];
+
+  const d=pdbDipoleData;
+  const showBB=$('dip-bb').checked;
+  const showIon=$('dip-ion').checked;
+  const showFull=$('dip-full').checked;
+  const showQuad=$('dip-quad').checked;
+
+  let info='PDB (std protonation): ';
+  info+=`BB=${d.backbone_D.toFixed(1)} D  Ion=${d.ionizable_D.toFixed(1)} D  Full=${d.full_D.toFixed(1)} D  Q=${d.net_charge.toFixed(3)} e`;
+  $('dipole-mag-info').textContent=info;
+
+  const configs=[
+    {key:'backbone',  show:showBB,
+     cPos:[1.0,0.85,0.0], cNeg:[0.8,0.55,0.0]},
+    {key:'ionizable', show:showIon,
+     cPos:[0.0,0.8,0.2],  cNeg:[0.85,0.2,0.85]},
+    {key:'full',      show:showFull,
+     cPos:[0.3,0.5,1.0],  cNeg:[1.0,0.2,0.2]},
+  ];
+
+  function rgbHex(c){
+    return '#'+c.map(v=>Math.round(v*255).toString(16).padStart(2,'0')).join('');
+  }
+  function lerpColor(a,b,t){
+    return [a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t, a[2]+(b[2]-a[2])*t];
+  }
+
+  const center=d.center;
+
+  if(configs.some(c=>c.show)){
+    const cs=dipoleViewer.addSphere({
+      center:{x:center[0],y:center[1],z:center[2]},radius:0.5,color:'white'
+    });
+    dipoleShapes.push(cs);
+  }
+
+  configs.forEach(cfg=>{
+    if(!cfg.show)return;
+    const a=d.arrows[cfg.key];
+
+    const cx=(a.neg[0]+a.pos[0])/2, cy=(a.neg[1]+a.pos[1])/2, cz=(a.neg[2]+a.pos[2])/2;
+    const dx=a.pos[0]-a.neg[0], dy=a.pos[1]-a.neg[1], dz=a.pos[2]-a.neg[2];
+    const fullLen=Math.sqrt(dx*dx+dy*dy+dz*dz);
+    if(fullLen<0.1)return;
+
+    const nx=dx/fullLen, ny=dy/fullLen, nz=dz/fullLen;
+    let half=fullLen/2;
+    if(half<2.5)half=2.5;
+
+    const posTip={x:cx+nx*half, y:cy+ny*half, z:cz+nz*half};
+    const negTip={x:cx-nx*half, y:cy-ny*half, z:cz-nz*half};
+
+    const headLen=half*0.12*2;
+    const headStart={
+      x:negTip.x+nx*headLen,
+      y:negTip.y+ny*headLen,
+      z:negTip.z+nz*headLen
+    };
+
+    const shaftRadius=0.5;
+    const headRadius=1.4;
+    const nGrad=8;
+    const nTaper=6;
+
+    const shaftLen=half*2-headLen;
+    for(let i=0;i<nGrad;i++){
+      const t0=i/nGrad, t1=(i+1)/nGrad;
+      const p0={
+        x:posTip.x-nx*shaftLen*t0,
+        y:posTip.y-ny*shaftLen*t0,
+        z:posTip.z-nz*shaftLen*t0
+      };
+      const p1={
+        x:posTip.x-nx*shaftLen*t1,
+        y:posTip.y-ny*shaftLen*t1,
+        z:posTip.z-nz*shaftLen*t1
+      };
+      const c0=rgbHex(lerpColor(cfg.cPos,cfg.cNeg,t0));
+      const c1=rgbHex(lerpColor(cfg.cPos,cfg.cNeg,t1));
+      const sid=dipoleViewer.addCylinder({
+        start:p0, end:p1,
+        radius:shaftRadius,
+        color:c0, color2:c1,
+        fromCap:i===0?2:0, toCap:0,
+      });
+      dipoleShapes.push(sid);
+    }
+
+    const negColor=rgbHex(cfg.cNeg);
+    for(let i=0;i<nTaper;i++){
+      const f0=i/nTaper, f1=(i+1)/nTaper;
+      const s0={
+        x:headStart.x+(negTip.x-headStart.x)*f0,
+        y:headStart.y+(negTip.y-headStart.y)*f0,
+        z:headStart.z+(negTip.z-headStart.z)*f0
+      };
+      const s1={
+        x:headStart.x+(negTip.x-headStart.x)*f1,
+        y:headStart.y+(negTip.y-headStart.y)*f1,
+        z:headStart.z+(negTip.z-headStart.z)*f1
+      };
+      let rSeg=headRadius*(1.0-(f0+f1)*0.5);
+      if(rSeg<0.05)rSeg=0.05;
+      const tid=dipoleViewer.addCylinder({
+        start:s0, end:s1,
+        radius:rSeg,
+        color:negColor,
+        fromCap:0, toCap:i===nTaper-1?2:0,
+      });
+      dipoleShapes.push(tid);
+    }
+
+    const posColor=rgbHex(cfg.cPos);
+    const crossSize=2.0, crossRadius=0.3;
+    const ref=Math.abs(nx)<0.9?[1,0,0]:[0,1,0];
+    let ux=ref[1]*nz-ref[2]*ny, uy=ref[2]*nx-ref[0]*nz, uz=ref[0]*ny-ref[1]*nx;
+    const umag=Math.sqrt(ux*ux+uy*uy+uz*uz);
+    ux/=umag;uy/=umag;uz/=umag;
+    let vx=ny*uz-nz*uy, vy=nz*ux-nx*uz, vz=nx*uy-ny*ux;
+
+    for(const[px,py,pz] of [[ux,uy,uz],[vx,vy,vz]]){
+      const barStart={x:posTip.x-px*crossSize*0.5, y:posTip.y-py*crossSize*0.5, z:posTip.z-pz*crossSize*0.5};
+      const barEnd={x:posTip.x+px*crossSize*0.5, y:posTip.y+py*crossSize*0.5, z:posTip.z+pz*crossSize*0.5};
+      const bid=dipoleViewer.addCylinder({
+        start:barStart, end:barEnd,
+        radius:crossRadius,
+        color:posColor,
+        fromCap:2, toCap:2,
+      });
+      dipoleShapes.push(bid);
+    }
+  });
+
+  /* Quadrupole axes for PDB mode */
+  if(showQuad && d.quadrupole_eigenvectors && d.quadrupole_eigenvalues){
+    const qev=d.quadrupole_eigenvalues;
+    const qvecs=d.quadrupole_eigenvectors;
+    const qColors=['#ff3366','#33ff66','#3399ff'];
+    const maxEig=Math.max(Math.abs(qev[0]),Math.abs(qev[1]),Math.abs(qev[2]),1);
+    const qScale=8.0/maxEig;
+
+    for(let qi=0;qi<3;qi++){
+      const len=Math.abs(qev[qi])*qScale;
+      if(len<0.5)continue;
+      const dv=qvecs[qi];
+      const p1={x:center[0]-dv[0]*len,y:center[1]-dv[1]*len,z:center[2]-dv[2]*len};
+      const p2={x:center[0]+dv[0]*len,y:center[1]+dv[1]*len,z:center[2]+dv[2]*len};
+      const qcid=dipoleViewer.addCylinder({
+        start:p1,end:p2,radius:0.35,color:qColors[qi],
+        fromCap:2,toCap:2,dashed:true
+      });
+      dipoleShapes.push(qcid);
+      const qs1=dipoleViewer.addSphere({center:p1,radius:0.8,color:qColors[qi]});
+      const qs2=dipoleViewer.addSphere({center:p2,radius:0.8,color:qColors[qi]});
+      dipoleShapes.push(qs1);dipoleShapes.push(qs2);
+    }
+  }
+
+  dipoleViewer.render();
 }
 
 /* ═══════════════════ INIT ═════════════════════════ */

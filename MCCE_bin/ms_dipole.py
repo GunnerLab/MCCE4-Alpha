@@ -31,6 +31,7 @@ Units: Dipole in Debye (1 e*A = 4.803 D), Quadrupole in e*A^2.
 
 Usage:
   ms_dipole.py                        # ensemble from cwd
+  ms_dipole.py --pdb protein.pdb      # PDB standard protonation
   ms_dipole.py --pqr state_0001.pqr   # single microstate PQR
   ms_dipole.py --dir /path/to/run     # ensemble from another dir
   ms_dipole.py --ph 4.0               # PyMOL snapshot at pH 4
@@ -76,9 +77,12 @@ def print_header(title):
 
 
 def print_single_state(results, label=""):
-    """Print formatted single-state dipole results."""
+    """Print formatted single-state dipole results with coordinates."""
     if label:
         print_header(label)
+
+    center = results["center"]
+    print(f"\n  Geometric center: ({center[0]:.2f}, {center[1]:.2f}, {center[2]:.2f})")
 
     for name, key in [("Backbone", "backbone_dipole"),
                       ("Ionizable", "ionizable_dipole"),
@@ -87,8 +91,8 @@ def print_single_state(results, label=""):
         mag = np.linalg.norm(mu)
         direction = mu / mag if mag > 0.1 else np.zeros(3)
         print(f"\n  {name} Dipole Moment:")
-        print(f"    mu = ({mu[0]:8.2f}, {mu[1]:8.2f}, {mu[2]:8.2f}) D")
         print(f"    |mu| = {mag:.2f} D")
+        print(f"    mu = ({mu[0]:8.2f}, {mu[1]:8.2f}, {mu[2]:8.2f}) D")
         if mag > 0.1:
             print(f"    dir  = ({direction[0]:.4f}, {direction[1]:.4f}, {direction[2]:.4f})")
 
@@ -100,6 +104,7 @@ def print_single_state(results, label=""):
     print(f"    Eigenvalues: ({eigvals[0]:.2f}, {eigvals[1]:.2f}, {eigvals[2]:.2f})")
 
     print(f"\n  Net Charge: {results['net_charge']:.3f} e")
+    print(f"  Arrow direction: (-) to (+)")
     print()
 
 
@@ -177,7 +182,6 @@ Examples:
   ms_dipole.py                        # ensemble from cwd
   ms_dipole.py --dir /path/to/run     # ensemble from another dir
   ms_dipole.py --pqr state_0001.pqr   # single microstate PQR
-  ms_dipole.py --pdb prot.pdb          # single structure, standard charges
   ms_dipole.py --ph 4.0               # PyMOL snapshot at pH 4
   ms_dipole.py -o lysozyme            # custom output prefix
 
@@ -190,18 +194,17 @@ PyMOL controls (type 'dipole_help' after loading the .pml script):
         """,
     )
 
+    parser.add_argument("--pdb", type=str, default=None,
+                        help="Input PDB file for standard protonation dipole. "
+                             "Uses step1_out.pdb + param/mcce.tpl charges.")
     parser.add_argument("--pqr", type=str, default=None,
                         help="PQR file for single microstate calculation. "
                              "If omitted, runs ensemble mode.")
-    parser.add_argument("--pdb", type=str, default=None, metavar="FILE",
-                        help="Input PDB for single-structure dipole using "
-                             "standard protonation charges from step1/topology. "
-                             "Runs step1.py if step1_out.pdb not found.")
     parser.add_argument("--dir", type=str, default=".",
                         help="MCCE4 run directory (default: current directory)")
     parser.add_argument("--pdb_display", type=str, default=None,
                         help="PDB/PQR for PyMOL protein display "
-                             "(default: prot_center.pdb, prot.pdb, or the input file)")
+                             "(default: step2_out.pdb or the PQR file)")
     parser.add_argument("--ph", type=float, default=7.0,
                         help="pH for PyMOL snapshot (default: 7.0)")
     parser.add_argument("--arrow_scale", type=float, default=0.1,
@@ -231,65 +234,77 @@ PyMOL controls (type 'dipole_help' after loading the .pml script):
         generate_pymol_script(pdb_file, results, pml_path,
                               ph_index=None, arrow_scale=args.arrow_scale)
 
+        pse_path = pml_path.replace(".pml", ".pse")
         print(f"  Output:")
         print(f"    PyMOL script  {pml_path}")
+        print(f"    PyMOL session {pse_path}  (open directly in PyMOL)")
         print(f"\n  -> pymol {pml_path}")
         print(f"  -> Type 'dipole_help' in PyMOL for toggle commands\n")
         return
 
     # ===================================================================
-    # PDB MODE — single structure with standard protonation charges
+    # PDB MODE — standard protonation from step1_out.pdb + topology
     # ===================================================================
     if args.pdb:
-        pdb_input = args.pdb
-        if not os.path.exists(pdb_input):
-            sys.exit(f"Error: PDB file not found: {pdb_input}")
+        if not os.path.exists(args.pdb):
+            sys.exit(f"Error: PDB file not found: {args.pdb}")
 
         mcce_dir = args.dir
+
+        # Check for step1_out.pdb; run step1.py if missing
         step1_path = os.path.join(mcce_dir, "step1_out.pdb")
-        param_path = os.path.join(mcce_dir, "param")
+        if not os.path.exists(step1_path):
+            print(f"\n  step1_out.pdb not found — running step1.py...")
+            step1_script = os.path.join(os.path.dirname(SCRIPT_DIR), "bin", "step1.py")
+            if not os.path.exists(step1_script):
+                step1_script = "step1.py"
+            try:
+                result = subprocess.run(
+                    [sys.executable, step1_script, args.pdb],
+                    cwd=mcce_dir, capture_output=True, text=True, timeout=300
+                )
+                if result.returncode != 0:
+                    print(f"\n  step1.py failed (exit code {result.returncode}):")
+                    if result.stderr:
+                        print(result.stderr[:500])
+                    sys.exit("  Fix these issues and run ms_dipole.py --pdb again.")
+            except FileNotFoundError:
+                sys.exit("  Error: step1.py not found. Run step1 manually first.")
 
         if not os.path.exists(step1_path):
-            print(f"\n  step1_out.pdb not found, running step1.py on {pdb_input}...")
-            result = subprocess.run(
-                ["step1.py", pdb_input],
-                cwd=os.path.abspath(mcce_dir),
-                capture_output=True, text=True
-            )
-            if result.returncode != 0 or not os.path.exists(step1_path):
-                print(f"\n  Error: step1.py failed.")
-                if result.stdout:
-                    print(f"  stdout: {result.stdout.strip()}")
-                if result.stderr:
-                    print(f"  stderr: {result.stderr.strip()}")
-                print(f"\n  Please fix these issues and run ms_dipole.py again.")
-                sys.exit(1)
-            print(f"  step1.py completed successfully.")
+            sys.exit(f"  Error: step1_out.pdb still not found after running step1.py")
 
-        if not os.path.exists(param_path):
-            sys.exit(f"Error: param/ directory not found in {os.path.abspath(mcce_dir)}. "
-                     f"step1.py may not have completed properly.")
+        # Load topology charges
+        param_dir = os.path.join(mcce_dir, "param")
+        tpl_path = os.path.join(param_dir, "mcce.tpl")
+        if not os.path.exists(tpl_path):
+            sys.exit(f"  Error: {tpl_path} not found. Run step1.py first to generate topology.")
 
-        print(f"\n  Reading step1_out.pdb: {step1_path}")
+        print_header("PDB Standard Protonation Dipole Analysis")
+        print(f"  Input PDB: {args.pdb}")
+
+        print(f"\n  Loading topology charges from {tpl_path}...")
+        tpl_charges = parse_tpl_charges(param_dir)
+        print(f"  Topology entries: {len(tpl_charges)}")
+
+        print(f"  Parsing step1_out.pdb...", end=" ", flush=True)
         conformers, all_atoms = parse_step2_pdb(step1_path)
-        print(f"  {len(conformers)} conformers, {len(all_atoms)} atoms")
+        print(f"{len(conformers)} conformers, {len(all_atoms)} atoms")
 
-        print(f"  Loading charges from {param_path}...")
-        tpl_charges = parse_tpl_charges(param_path)
-        print(f"  {len(tpl_charges)} charge entries loaded")
-
+        print(f"  Computing dipole with standard protonation charges...")
         results = compute_from_step1(conformers, all_atoms, tpl_charges)
-        print_single_state(results,
-                           label=f"PDB Structure: {os.path.basename(pdb_input)} (standard protonation)")
+        print_single_state(results, label="Standard Protonation State")
 
-        pdb_file = args.pdb_display or pdb_input
-        prefix = f"{args.output_prefix}_pdb"
-        pml_path = f"{prefix}_pymol.pml"
+        # Generate outputs with _pdb suffix
+        pdb_file = args.pdb_display or args.pdb
+        pml_path = f"{args.output_prefix}_pdb_pymol.pml"
         generate_pymol_script(pdb_file, results, pml_path,
                               ph_index=None, arrow_scale=args.arrow_scale)
 
+        pse_path = pml_path.replace(".pml", ".pse")
         print(f"  Output:")
         print(f"    PyMOL script  {pml_path}")
+        print(f"    PyMOL session {pse_path}  (open directly in PyMOL)")
         print(f"\n  -> pymol {pml_path}")
         print(f"  -> Type 'dipole_help' in PyMOL for toggle commands\n")
         return
@@ -355,14 +370,22 @@ PyMOL controls (type 'dipole_help' after loading the .pml script):
 
     ph_idx = np.argmin(np.abs(ph_values - args.ph))
     actual_ph = ph_values[ph_idx]
-    pdb_file = args.pdb_display or step2_path
+    pdb_file = args.pdb_display or find_file(mcce_dir, "prot_center.pdb", "prot.pdb")
+    if not pdb_file:
+        print(f"\n  Error: No protein PDB found for visualization.")
+        print(f"  Looked for prot_center.pdb and prot.pdb in {os.path.abspath(mcce_dir)}")
+        print(f"  Please provide one with: ms_dipole.py --pdb <your_protein.pdb>")
+        sys.exit(1)
+    print(f"  Protein PDB for visualization: {os.path.basename(pdb_file)}")
     pml_path = f"{args.output_prefix}_pH{actual_ph:.0f}_pymol.pml"
     generate_pymol_script(pdb_file, results, pml_path,
                           ph_index=ph_idx, arrow_scale=args.arrow_scale)
 
+    pse_path = pml_path.replace(".pml", ".pse")
     print(f"  Output:")
     print(f"    pH scan CSV   {csv_path}")
     print(f"    PyMOL script  {pml_path}  (pH {actual_ph:.1f})")
+    print(f"    PyMOL session {pse_path}  (open directly in PyMOL)")
     print(f"\n  -> pymol {pml_path}")
     print(f"  -> Type 'dipole_help' in PyMOL for toggle commands\n")
 

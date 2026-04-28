@@ -51,15 +51,14 @@ Examples:
         """,
     )
 
+    parser.add_argument("--pdb", type=str, default=None,
+                        help="Input PDB for standard protonation dipole")
     parser.add_argument("--pqr", type=str, default=None,
                         help="PQR file for single microstate calculation")
-    parser.add_argument("--pdb", type=str, default=None, metavar="FILE",
-                        help="Input PDB for single-structure dipole using "
-                             "standard protonation charges from step1/topology")
     parser.add_argument("--dir", type=str, default=".",
                         help="MCCE4 run directory (default: cwd)")
     parser.add_argument("--pdb_display", type=str, default=None,
-                        help="PDB for PyMOL display (default: input file)")
+                        help="PDB for PyMOL display (default: step2_out.pdb)")
     parser.add_argument("--ph", type=float, default=7.0,
                         help="pH for PyMOL snapshot (default: 7.0)")
     parser.add_argument("--arrow_scale", type=float, default=0.1,
@@ -85,40 +84,51 @@ Examples:
         return
 
     if args.pdb:
-        pdb_input = args.pdb
-        if not os.path.exists(pdb_input):
-            sys.exit(f"Error: PDB file not found: {pdb_input}")
+        if not os.path.exists(args.pdb):
+            sys.exit(f"Error: PDB file not found: {args.pdb}")
 
         mcce_dir = args.dir
         step1_path = os.path.join(mcce_dir, "step1_out.pdb")
-        param_path = os.path.join(mcce_dir, "param")
+        if not os.path.exists(step1_path):
+            print(f"\n  step1_out.pdb not found — running step1.py...")
+            step1_script = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "..", "bin", "step1.py"
+            )
+            if not os.path.exists(step1_script):
+                step1_script = "step1.py"
+            try:
+                result = subprocess.run(
+                    [sys.executable, step1_script, args.pdb],
+                    cwd=mcce_dir, capture_output=True, text=True, timeout=300
+                )
+                if result.returncode != 0:
+                    print(f"\n  step1.py failed (exit code {result.returncode}):")
+                    if result.stderr:
+                        print(result.stderr[:500])
+                    sys.exit("  Fix these issues and run again.")
+            except FileNotFoundError:
+                sys.exit("  Error: step1.py not found. Run step1 manually first.")
 
         if not os.path.exists(step1_path):
-            print(f"\n  step1_out.pdb not found, running step1.py on {pdb_input}...")
-            result = subprocess.run(
-                ["step1.py", pdb_input],
-                cwd=os.path.abspath(mcce_dir),
-                capture_output=True, text=True
-            )
-            if result.returncode != 0 or not os.path.exists(step1_path):
-                print(f"\n  Error: step1.py failed.")
-                if result.stdout:
-                    print(f"  stdout: {result.stdout.strip()}")
-                if result.stderr:
-                    print(f"  stderr: {result.stderr.strip()}")
-                print(f"\n  Please fix these issues and run again.")
-                sys.exit(1)
+            sys.exit(f"  Error: step1_out.pdb still not found after running step1.py")
 
-        if not os.path.exists(param_path):
-            sys.exit(f"Error: param/ directory not found in {os.path.abspath(mcce_dir)}.")
+        param_dir = os.path.join(mcce_dir, "param")
+        tpl_path = os.path.join(param_dir, "mcce.tpl")
+        if not os.path.exists(tpl_path):
+            sys.exit(f"  Error: {tpl_path} not found. Run step1.py first.")
+
+        print(f"\n  PDB standard protonation: {args.pdb}")
+        tpl_charges = parse_tpl_charges(param_dir)
+        print(f"  Topology entries: {len(tpl_charges)}")
 
         conformers, all_atoms = parse_step2_pdb(step1_path)
-        tpl_charges = parse_tpl_charges(param_path)
+        print(f"  {len(conformers)} conformers, {len(all_atoms)} atoms")
+
         results = compute_from_step1(conformers, all_atoms, tpl_charges)
 
-        pdb_file = args.pdb_display or pdb_input
-        prefix = f"{args.output_prefix}_pdb"
-        pml_path = f"{prefix}_pymol.pml"
+        pdb_file = args.pdb_display or args.pdb
+        pml_path = f"{args.output_prefix}_pdb_pymol.pml"
         generate_pymol_script(pdb_file, results, pml_path,
                               ph_index=None, arrow_scale=args.arrow_scale)
         print(f"  PyMOL script: {pml_path}\n")

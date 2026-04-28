@@ -245,8 +245,9 @@ def compute_from_ensemble(conformers, head3_data,
     return results
 
 
-# Standard protonation states at pH 7 for ionizable residues.
-# Maps residue name -> conf_type to use for charge lookup.
+# ---------------------------------------------------------------------------
+# PDB standard-protonation (single state from step1_out.pdb + topology)
+# ---------------------------------------------------------------------------
 STANDARD_PROTONATION = {
     "ARG": "+1",   # pKa ~12.5, protonated
     "LYS": "+1",   # pKa ~10.5, protonated
@@ -262,35 +263,35 @@ STANDARD_PROTONATION = {
 
 def compute_from_step1(conformers, all_atoms, tpl_charges):
     """
-    Compute dipole from step1_out.pdb using topology charges at standard
-    protonation (pH 7).
+    Compute dipole/quadrupole from step1_out.pdb using standard protonation
+    charges from the topology (param/mcce.tpl).
 
-    step1_out.pdb has 0.000 in the charge field — actual charges come from
-    param/mcce.tpl. Each atom is matched by (conf_key, atom_name) where
-    conf_key = RES(3) + CONFTYPE(2), e.g. "ARGBK", "ARG+1".
+    For ionizable sidechain atoms, charges are looked up under the standard
+    protonation conf_key (e.g. ARG+1) first, falling back to the original
+    conf_key (e.g. ARG01) for atoms that exist in both forms.
 
-    For ionizable residues, the standard protonation state at pH 7 is used:
-      ARG/LYS/NTR -> "+1" (protonated)
-      ASP/GLU/CTR -> "-1" (deprotonated)
-      HIS/TYR/CYS -> "01" (neutral)
+    Note: step1_out.pdb only contains atoms from the 01 conformer geometry.
+    Protons that exist only in +1/-1 forms (e.g. HE on ARG+1) are absent,
+    so the net charge will be systematically underestimated for ionizable
+    residues whose standard state differs from 01.
 
     Parameters:
-        conformers: dict {conf_id: [Atom, ...]} from parse_step2_pdb()
-        all_atoms:  flat list of Atom objects
+        conformers: dict from parsers.parse_step2_pdb() (works on step1_out.pdb)
+        all_atoms:  list of Atom objects from parse_step2_pdb()
         tpl_charges: dict {(conf_key, atom_name): charge} from parse_tpl_charges()
 
     Returns:
-        dict with dipole results (same format as compute_from_pqr)
+        dict — same format as compute_from_pqr()
     """
     pqr_atoms = []
     unmatched = 0
+
     for atom in all_atoms:
-        # For ionizable sidechain conformers, remap to standard protonation
         if atom.res_name in STANDARD_PROTONATION and atom.conf_type != "BK":
             std_type = STANDARD_PROTONATION[atom.res_name]
             std_key = atom.res_name + std_type
             orig_key = atom.conf_key
-            # Use standard protonation charge if available, else fall back to 01
+
             if (std_key, atom.name) in tpl_charges:
                 charge = tpl_charges[(std_key, atom.name)]
             elif (orig_key, atom.name) in tpl_charges:
