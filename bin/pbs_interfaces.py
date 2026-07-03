@@ -637,8 +637,31 @@ class PBS_NGPB:
             logger.critical("Could not open NGPB output file phi_on_atoms.txt.")
             sys.exit(1)
 
-        for counter in range(len(xyzrcp)):
-            phi = float(lines[counter][:].split()[3])
+        expected_lines = len(xyzrcp)
+        if len(lines) < expected_lines:
+            logger.critical(
+                "NGPB output phi_on_atoms.txt has fewer lines than expected: "
+                "%d lines for %d atoms." % (len(lines), expected_lines)
+            )
+            sys.exit(1)
+
+        for counter in range(expected_lines):
+            parts = lines[counter].split()
+            if not parts:
+                logger.critical(
+                    "NGPB output phi_on_atoms.txt has an empty line at line %d."
+                    % (counter + 1)
+                )
+                sys.exit(1)
+
+            try:
+                phi = float(parts[-1])
+            except ValueError:
+                logger.critical(
+                    "Could not parse NGPB atom potential from phi_on_atoms.txt "
+                    "line %d: %r" % (counter + 1, lines[counter].rstrip("\n"))
+                )
+                sys.exit(1)
             xyzrcp[counter].p = phi
 
         return
