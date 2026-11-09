@@ -23,7 +23,6 @@ Special_res = {"_CU": (["+1"], ["+2"]),
                "HOH": (["01"], ["DM"]),
                "FAD": (["01"], ["-1"]),
                "FMN": (["01"], ["-1"]),
-               "CLW": (["-1"], ["0W"]), 
 	       "T4Y": (["01"], ["+1", "+2"])}
 
 class E_IONIZE:
@@ -646,8 +645,46 @@ def mfe(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description= ("Calculate mean field ionization energy on an ionizable"
-                      "residue at a specific pH/eH."),
+        description=("Calculate mean field ionization energy on an ionizable "
+                     "residue at a specific pH/Eh."),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+The residue name
+----------------
+The `residue` argument must be copied *verbatim* from the first column of
+pK.out (run mfe.py from the same MCCE run directory that contains pK.out,
+head3.lst, fort.38 and sum_crg.out). That first column looks like:
+
+    GLU-A0004_
+    LYS+A0007_
+    HIS+P0065_
+    |  ||    |
+    |  ||    +--- conformer/insertion code   (usually '_')
+    |  ||+------- 4-digit sequence number     (0004, 0065, ...)
+    |  |+-------- chain ID                     (A, P, ...)
+    |  +--------- charge sign of ionized form  (+ or -)
+    +----------- 3-letter residue name        (GLU, LYS, HIS, ...)
+
+So a value like GLU+P0065_ is not something you build by hand: open pK.out,
+find the row you care about, and paste its first field exactly (the sign and
+the trailing '_' are part of the name). To list the available names:
+
+    awk 'NR>1{print $1}' pK.out
+
+Examples
+--------
+  # mfe for GLU+P0065_ at pH 7, only report pairwise terms >= 0.05 pH units
+  mfe.py GLU+P0065_ -p 7 -c 0.05
+
+  # mfe evaluated at the residue's own pKa/Em midpoint (default for -p)
+  mfe.py GLU-A0004_
+
+  # mfe at pH 5, force the -TS entropy correction off
+  mfe.py HIS+A0031_ -p 5 -x f
+
+  # an Eh titration run: -p is the Eh in mV instead of a pH
+  mfe.py HEM+A0154_ -p 100
+""",
     )
 
     parser.add_argument(
@@ -673,7 +710,9 @@ if __name__ == "__main__":
         "residue",
         metavar="residue",
         nargs=1,
-        help="The residue name as in pK.out; default: %(default)s")
+        help=("Residue name copied verbatim from the first column of pK.out, "
+              "e.g. GLU+P0065_ (the charge sign and trailing '_' are part of "
+              "the name). See the examples below."))
 
     args = parser.parse_args()
 
