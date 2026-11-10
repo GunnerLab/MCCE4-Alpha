@@ -38,8 +38,10 @@ help_msg() {
   echo ""
   echo "Help option:"
   echo " -h  : Display this help message & exit."
-  echo "     : Note: If you already have a conda environment named '$ENV_NAME', it won't be modified;"
-  echo "     : yet, it will need to comply with the requirements in $CLONE_PATH/$YML."
+  echo "     : Note: If you already have a conda environment named '$ENV_NAME', only apptainer"
+  echo "     : will be installed if needed (if the unprivileged installation is not possible"
+  echo "     : and apptainer is not already in the environment)."
+  echo "     : Yet, the '$ENV_NAME' env will need to comply with the requirements in $CLONE_PATH/$YML."
   echo "     : To have it recreated, first remove it by running this command (conda required):"
   echo "     :  conda env remove -n $ENV_NAME"
   echo ""
@@ -71,10 +73,11 @@ fi
 
 echo ""
 echo "Checking for conda..."
+CONDA_FOUND=0
 DO_CONDA=0
 if command -v conda >/dev/null 2>&1; then
   echo "  Conda found."
-  DO_CONDA=1
+  CONDA_FOUND=1
 else
   echo "STOP: conda is required, but not found on your system."
   echo "TODO: Please, install miniconda with the following commands (with lines 2-4 obtained "
@@ -153,19 +156,26 @@ else
   fi
 fi
 
-if [[ "$DO_CONDA" -eq 1 ]]; then
+if [[ "$CONDA_FOUND" -eq 1 ]]; then
   echo ""
-  echo "Conda environment creation..."
+  echo "Conda environment checks..."
   ENVS="$(conda env list)"
-  # check if env with default name already exists:
+  # check if env with default ENV_NAME already exists:
   if echo "$ENVS" | grep -q "^${ENV_NAME}\s\+"; then
-    echo "  Updating existing '$ENV_NAME' env..."
-    conda env update -n $ENV_NAME -f "$CLONE_PATH/$YML"
+    DO_CONDA=1
+    # Check if apptainer package exists in the specific environment
+    if conda list -n "$ENV_NAME" "^apptainer$" | grep -q "^apptainer "; then
+        echo "  OK: 'apptainer' is already installed in '${ENV_NAME}'."
+        # reset env installation flag:
+        APPTAINER_CONDA=0
+    fi
   else
     echo "  Creating a dedicated conda env with default name: $ENV_NAME"
     conda env create -f "$CLONE_PATH/$YML"
+    DO_CONDA=1
   fi
   if [[ "$APPTAINER_CONDA" -eq 1 ]]; then
+    echo "  Installing the 'apptainer' package in '${ENV_NAME}'..."
     conda install -n $ENV_NAME -c conda-forge apptainer -y
   fi
 fi
