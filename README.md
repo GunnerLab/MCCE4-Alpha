@@ -23,7 +23,7 @@ The file `MCCE_bin/sudo_install.txt` has the necessary information for you or yo
 
 ## __Quick Installation__
 #### "Quick Install" script `MCCE_bin/quick_install.sh`:
-__Note: The quick install script will modify an existing conda environment named 'mc4'.__ 
+__UPDATE Note: The quick install script will only modify an existing conda environment named 'mc4' by installing apptainer, and will do so only if no apptainer system installation is found and the unpriviledgd installation is not possible (user not a sudoer).__ 
 If you need to re-create it, to troubleshoot an installation issue, for example, run this command before running the script:
 ```
  conda env remove -n mc4
@@ -33,7 +33,7 @@ If you need to re-create it, to troubleshoot an installation issue, for example,
   ```
    git clone https://github.com/GunnerLab/MCCE4-Alpha.git; cd MCCE4-Alpha;
   ```
-  
+
   2. Run the `quick_install.sh` script to download MCCE PBE solver (NGPB) image file and create a conda environment for MCCE4 (this may need several passes if you need to install dependencies such as miniconda and apptainer):
   ```
    bash ./MCCE_bin/quick_install.sh
@@ -41,7 +41,7 @@ If you need to re-create it, to troubleshoot an installation issue, for example,
 
 ### What this script does:
   - Checks for required `conda`; Stops if not found so you can install it (commands provided).
-  - Create a conda environment for MCCE4 named 'mc4' (using 'mc4.yml').
+  - Creates a conda environment for MCCE4 named 'mc4' (using 'mc4.yml') if it does not exist.
   - Checks for required `apptainer`; If a system Apptainer installation is not found & an 'unprivilege' version cannot be installed, Apptainer is conda-installed in 'mc4'.
   - Downloads the generic image for NGPB in MCCE4-Alpha/bin.
   - Adds export commands to the PATH variable in ~/.bashrc for:
